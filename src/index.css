@@ -1,0 +1,1192 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-display: "Bricolage Grotesque", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-serif-editorial: "Newsreader", Georgia, Cambria, serif;
+  --font-tech: "Space Grotesk", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans: "Manrope", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* ==========================================================================
+   Parlo Dual-Finish Adaptive Architecture
+   1. Obsidian Glass (Dark-Mode-First): Floating #0c0c0f shell inside #050608,
+      60x60px precision architectural grid, grainy fractal noise, 120px radial
+      glow-spheres, and 16px-blur frosted glass cards.
+   2. Soft Ceramic (Neumorphic Light): Cool clay #E0E5EC monochromatic base
+      tinted gently by the active language, with authentic dual opposing RGBA
+      extruded shadows and deep carved-inset control wells.
+   ========================================================================== */
+
+/* Per-language chromatic pigment DNA (applied via <html data-culture="es|fr|...">) */
+:root,
+[data-culture="es"] {
+  --culture-primary: #15548a;
+  --culture-primary-hover: #0e3f69;
+  --culture-accent: #df4b22;
+  --culture-glow: #f2a922;
+  --culture-tint: #ece6df;
+
+  --culture-primary-dark: #f7b731;
+  --culture-primary-dark-hover: #ffca57;
+  --culture-accent-dark: #ff5e3a;
+  --culture-glow-dark: #3b82f6;
+  --culture-dark-tint: #14100b;
+}
+
+[data-culture="fr"] {
+  --culture-primary: #263d94;
+  --culture-primary-hover: #1b2d72;
+  --culture-accent: #c9334b;
+  --culture-glow: #e0ae46;
+  --culture-tint: #e1e4f0;
+
+  --culture-primary-dark: #7c9cff;
+  --culture-primary-dark-hover: #9ab3ff;
+  --culture-accent-dark: #ff5c8a;
+  --culture-glow-dark: #f2c96b;
+  --culture-dark-tint: #0d101c;
+}
+
+[data-culture="ja"] {
+  --culture-primary: #1b3b78;
+  --culture-primary-hover: #122a57;
+  --culture-accent: #d6362c;
+  --culture-glow: #f08ba5;
+  --culture-tint: #ece2e6;
+
+  --culture-primary-dark: #ff85a1;
+  --culture-primary-dark-hover: #ffa3b8;
+  --culture-accent-dark: #ff4d4d;
+  --culture-glow-dark: #6b8cff;
+  --culture-dark-tint: #160d12;
+}
+
+[data-culture="de"] {
+  --culture-primary: #0e5d75;
+  --culture-primary-hover: #094557;
+  --culture-accent: #df5118;
+  --culture-glow: #82b814;
+  --culture-tint: #dce6e9;
+
+  --culture-primary-dark: #ccff00;
+  --culture-primary-dark-hover: #dcff4d;
+  --culture-accent-dark: #10b981;
+  --culture-glow-dark: #22d3ee;
+  --culture-dark-tint: #0c140e;
+}
+
+[data-culture="it"] {
+  --culture-primary: #156347;
+  --culture-primary-hover: #0e4a34;
+  --culture-accent: #cc4825;
+  --culture-glow: #dea036;
+  --culture-tint: #e0e8e1;
+
+  --culture-primary-dark: #34d399;
+  --culture-primary-dark-hover: #5ce6b2;
+  --culture-accent-dark: #ff6b4a;
+  --culture-glow-dark: #fbbf24;
+  --culture-dark-tint: #0b1410;
+}
+
+[data-culture="zh"] {
+  --culture-primary: #0f6659;
+  --culture-primary-hover: #094c42;
+  --culture-accent: #ce2e2b;
+  --culture-glow: #e8a235;
+  --culture-tint: #e8e4df;
+
+  --culture-primary-dark: #2dd4bf;
+  --culture-primary-dark-hover: #5eead4;
+  --culture-accent-dark: #ff5252;
+  --culture-glow-dark: #f5b041;
+  --culture-dark-tint: #130e0e;
+}
+
+[data-culture="ko"] {
+  --culture-primary: #16687a;
+  --culture-primary-hover: #0f4e5c;
+  --culture-accent: #d94436;
+  --culture-glow: #665fd1;
+  --culture-tint: #dde7ec;
+
+  --culture-primary-dark: #38bdf8;
+  --culture-primary-dark-hover: #7dd3fc;
+  --culture-accent-dark: #fb7185;
+  --culture-glow-dark: #a78bfa;
+  --culture-dark-tint: #0b1218;
+}
+
+[data-culture="pt"] {
+  --culture-primary: #1650a8;
+  --culture-primary-hover: #0f3b7d;
+  --culture-accent: #d6800c;
+  --culture-glow: #2b93b8;
+  --culture-tint: #dde5f1;
+
+  --culture-primary-dark: #60a5fa;
+  --culture-primary-dark-hover: #93c5fd;
+  --culture-accent-dark: #fbbf24;
+  --culture-glow-dark: #22d3ee;
+  --culture-dark-tint: #0b111c;
+}
+
+/* ==========================================================================
+   Finish 1 (Default): Obsidian Glass (Dark-Mode-First Floating Shell)
+   ========================================================================== */
+:root,
+[data-mode="dark"] {
+  --parlo-viewport: #040507;
+  --parlo-shell: color-mix(in srgb, #0c0c0f 86%, var(--culture-dark-tint) 14%);
+  --parlo-shell-ring: rgba(255, 255, 255, 0.1);
+  --parlo-canvas: color-mix(in srgb, #0a0a0d 84%, var(--culture-dark-tint) 16%);
+  --parlo-surface: rgba(255, 255, 255, 0.032);
+  --parlo-surface-solid: #121319;
+  --parlo-surface-alt: rgba(255, 255, 255, 0.048);
+  --parlo-stage-bg: rgba(0, 0, 0, 0.34);
+  --parlo-nav-pill: rgba(255, 255, 255, 0.045);
+  --parlo-grid-line: rgba(255, 255, 255, 0.045);
+
+  --parlo-ink: #ebebeb;
+  --parlo-ink-secondary: rgba(235, 235, 235, 0.72);
+  --parlo-ink-muted: rgba(235, 235, 235, 0.48);
+  --parlo-border: rgba(255, 255, 255, 0.1);
+  --parlo-primary: var(--culture-primary-dark);
+  --parlo-primary-hover: var(--culture-primary-dark-hover);
+  --parlo-primary-soft: color-mix(in srgb, var(--culture-primary-dark) 14%, rgba(18, 19, 25, 0.92));
+  --parlo-accent: var(--culture-accent-dark);
+  --parlo-accent-soft: color-mix(in srgb, var(--culture-accent-dark) 14%, rgba(18, 19, 25, 0.92));
+  --parlo-accent-border: color-mix(in srgb, var(--culture-accent-dark) 38%, rgba(255, 255, 255, 0.08));
+  --parlo-glow: var(--culture-glow-dark);
+  --parlo-on-solid: #08090c;
+  --parlo-keycap-lip: color-mix(in srgb, var(--culture-primary-dark) 50%, #000000);
+
+  /* Clean dark semantic mappings for Tailwind utilities */
+  --color-white: #14161e;
+  --color-blue-50: color-mix(in srgb, var(--culture-primary-dark) 13%, #121319);
+  --color-blue-100: color-mix(in srgb, var(--culture-primary-dark) 20%, #121319);
+  --color-blue-200: color-mix(in srgb, var(--culture-primary-dark) 34%, #121319);
+  --color-blue-600: var(--culture-primary-dark);
+  --color-blue-700: var(--culture-primary-dark);
+  --color-blue-800: var(--culture-primary-dark-hover);
+
+  --color-slate-50: #13151d;
+  --color-slate-100: #191c26;
+  --color-slate-200: rgba(255, 255, 255, 0.11);
+  --color-slate-300: rgba(255, 255, 255, 0.18);
+  --color-slate-400: #8790a2;
+  --color-slate-500: #a1a9ba;
+  --color-slate-600: #bcc3d1;
+  --color-slate-700: #d3d8e2;
+  --color-slate-800: #e5e8ef;
+  --color-slate-900: #f3f4f8;
+  --color-slate-950: #ffffff;
+
+  --color-orange-50: color-mix(in srgb, var(--culture-accent-dark) 14%, #121319);
+  --color-orange-100: color-mix(in srgb, var(--culture-accent-dark) 22%, #121319);
+  --color-orange-200: color-mix(in srgb, var(--culture-accent-dark) 36%, #121319);
+  --color-orange-800: #ffb4a1;
+
+  --color-emerald-50: #0b241d;
+  --color-emerald-200: #1a4d3c;
+  --color-emerald-700: #5ce1b0;
+  --color-emerald-800: #72ebb8;
+  --color-emerald-950: #e7fdf4;
+
+  --color-amber-50: #291e0b;
+  --color-amber-100: #3b2a0e;
+  --color-amber-200: #573e14;
+  --color-amber-700: #fbbf24;
+  --color-amber-900: #fde68a;
+
+  --color-red-50: #2b1114;
+  --color-red-200: #5c1e24;
+  --color-red-600: #f87171;
+  --color-red-700: #fca5a5;
+  --color-red-800: #fecaca;
+}
+
+/* ==========================================================================
+   Finish 2: Soft Ceramic (Neumorphic Cool Clay — Adaptive to Active Culture)
+   ========================================================================== */
+[data-mode="light"] {
+  --parlo-viewport: color-mix(in srgb, #d7dde6 88%, var(--culture-tint) 12%);
+  --parlo-shell: color-mix(in srgb, #e0e5ec 90%, var(--culture-tint) 10%);
+  --parlo-shell-ring: rgba(255, 255, 255, 0.72);
+  --parlo-canvas: color-mix(in srgb, #e0e5ec 90%, var(--culture-tint) 10%);
+  --parlo-surface: color-mix(in srgb, #e4e9f0 92%, var(--culture-tint) 8%);
+  --parlo-surface-solid: color-mix(in srgb, #e6ebf2 92%, var(--culture-tint) 8%);
+  --parlo-surface-alt: color-mix(in srgb, #dce2ea 90%, var(--culture-tint) 10%);
+  --parlo-stage-bg: color-mix(in srgb, #d9dfe8 90%, var(--culture-tint) 10%);
+  --parlo-nav-pill: color-mix(in srgb, #e0e5ec 92%, #ffffff 8%);
+  --parlo-grid-line: rgba(110, 126, 150, 0.085);
+
+  --parlo-ink: #242d3a;
+  --parlo-ink-secondary: #435063;
+  --parlo-ink-muted: #5d6a7e;
+  --parlo-border: rgba(163, 177, 198, 0.42);
+  --parlo-primary: var(--culture-primary);
+  --parlo-primary-hover: var(--culture-primary-hover);
+  --parlo-primary-soft: color-mix(in srgb, var(--culture-primary) 10%, #e4e9f0);
+  --parlo-accent: var(--culture-accent);
+  --parlo-accent-soft: color-mix(in srgb, var(--culture-accent) 10%, #e4e9f0);
+  --parlo-accent-border: color-mix(in srgb, var(--culture-accent) 34%, #e4e9f0);
+  --parlo-glow: var(--culture-glow);
+  --parlo-on-solid: #ffffff;
+  --parlo-keycap-lip: color-mix(in srgb, var(--culture-primary) 64%, #000000);
+
+  /* Soft Ceramic Tailwind utility overrides */
+  --color-white: #e8edf4;
+  --color-blue-50: color-mix(in srgb, var(--culture-primary) 9%, #e4e9f0);
+  --color-blue-100: color-mix(in srgb, var(--culture-primary) 16%, #e4e9f0);
+  --color-blue-200: color-mix(in srgb, var(--culture-primary) 28%, #e4e9f0);
+  --color-blue-600: var(--culture-primary);
+  --color-blue-700: var(--culture-primary);
+  --color-blue-800: var(--culture-primary-hover);
+
+  --color-slate-50: color-mix(in srgb, #dce2eb 92%, var(--culture-tint) 8%);
+  --color-slate-100: color-mix(in srgb, #d4dbe6 92%, var(--culture-tint) 8%);
+  --color-slate-200: rgba(163, 177, 198, 0.45);
+  --color-slate-300: #b5c0d1;
+  --color-slate-400: #7c899d;
+  --color-slate-500: #5b687c;
+  --color-slate-600: #465366;
+  --color-slate-700: #334052;
+  --color-slate-800: #25303f;
+  --color-slate-900: #1b2430;
+  --color-slate-950: #10161e;
+
+  --color-orange-50: color-mix(in srgb, var(--culture-accent) 10%, #e4e9f0);
+  --color-orange-100: color-mix(in srgb, var(--culture-accent) 16%, #e4e9f0);
+  --color-orange-200: color-mix(in srgb, var(--culture-accent) 32%, #e4e9f0);
+  --color-orange-800: color-mix(in srgb, var(--culture-accent) 78%, #000000);
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    color: var(--parlo-ink);
+    background-color: var(--parlo-viewport);
+    transition: background-color 480ms cubic-bezier(0.16, 1, 0.3, 1),
+      color 320ms ease;
+  }
+
+  h1,
+  h2,
+  .font-display {
+    font-family: var(--font-display);
+    letter-spacing: -0.03em;
+  }
+
+  .font-serif-editorial {
+    font-family: var(--font-serif-editorial);
+    letter-spacing: -0.035em;
+  }
+
+  .font-tech {
+    font-family: var(--font-tech);
+  }
+
+  /* Browser-Core precision scrollbars */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--parlo-ink) 18%, transparent);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--parlo-primary) 55%, transparent);
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+   Cyber-Serif & Kinetic Component Primitives:
+   - Expanding 1px kinetic underline on links
+   - Shimmer Border (4s) + Mouse Spotlight Tracking Cards
+   - Organic 9s Morphing Background Glow Blobs
+   - Rotating Conic-Gradient Radiant Prompt Input (@property)
+   ========================================================================== */
+.parlo-link-underline {
+  position: relative;
+}
+
+.parlo-link-underline::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 1.5px;
+  background: var(--parlo-primary);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.parlo-link-underline:hover::after,
+.parlo-link-underline[data-active="true"]::after {
+  transform: scaleX(1);
+}
+
+@keyframes parlo-shimmer-sweep {
+  0% {
+    background-position: 200% 0%;
+  }
+  100% {
+    background-position: -200% 0%;
+  }
+}
+
+.parlo-shimmer-card {
+  position: relative;
+  isolation: isolate;
+}
+
+.parlo-shimmer-card::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  z-index: 2;
+  background: linear-gradient(
+    115deg,
+    transparent 24%,
+    color-mix(in srgb, var(--parlo-primary) 52%, transparent) 50%,
+    color-mix(in srgb, var(--parlo-accent) 34%, transparent) 62%,
+    transparent 82%
+  );
+  background-size: 240% 100%;
+  animation: parlo-shimmer-sweep 5.5s linear infinite;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0.28;
+  transition: opacity 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.parlo-shimmer-card:hover::after {
+  opacity: 0.85;
+}
+
+/* Organic 9s Morphing Background Glow Blobs */
+@keyframes parlo-blob-morph {
+  0%,
+  100% {
+    border-radius: 40% 60% 60% 40% / 70% 30% 70% 30%;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    border-radius: 60% 40% 40% 60% / 30% 70% 30% 70%;
+    transform: translate3d(14px, -18px, 0) scale(1.06);
+  }
+}
+
+.parlo-morph-blob {
+  animation: parlo-blob-morph 9s ease-in-out infinite;
+  will-change: transform, border-radius;
+}
+
+/* Radiant Kinetic Conic-Gradient Input Border */
+@property --parlo-radiant-rot {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes parlo-radiant-spin {
+  to {
+    --parlo-radiant-rot: 360deg;
+  }
+}
+
+.parlo-radiant-shell {
+  position: relative;
+  isolation: isolate;
+  --radiant-gradient: conic-gradient(
+    from var(--parlo-radiant-rot) at 50% 50%,
+    var(--parlo-primary) 0%,
+    var(--parlo-glow) 28%,
+    var(--parlo-accent) 55%,
+    color-mix(in srgb, var(--parlo-primary) 75%, #ffffff) 78%,
+    var(--parlo-primary) 100%
+  );
+  animation: parlo-radiant-spin 5.5s linear infinite;
+}
+
+.parlo-radiant-shell::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  background: var(--radiant-gradient);
+  filter: blur(11px);
+  opacity: 0.34;
+  z-index: -1;
+  transition: opacity 280ms ease;
+}
+
+.parlo-radiant-shell:focus-within::before,
+.parlo-radiant-shell:hover::before {
+  opacity: 0.62;
+}
+
+.parlo-radiant-border {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.75px;
+  background: var(--radiant-gradient);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.parlo-radiant-shell[data-disabled="true"] {
+  animation-play-state: paused;
+}
+
+.parlo-radiant-shell[data-disabled="true"]::before {
+  opacity: 0.14;
+}
+
+.parlo-radiant-shell[data-disabled="true"] .parlo-radiant-border {
+  opacity: 0.38;
+}
+
+/* ==========================================================================
+   Floating Architectural Shell & Background Texture Primitives
+   - 60x60px precision linear-gradient architectural grid
+   - Fractal noise SVG grain overlay
+   - 120px-blurred luminous glow spheres
+   - Concentric molded/glass architectural rings
+   ========================================================================== */
+.parlo-viewport-stage {
+  background-color: var(--parlo-viewport);
+}
+
+.parlo-floating-shell {
+  background-color: var(--parlo-shell);
+  box-shadow:
+    0 0 0 1px var(--parlo-shell-ring),
+    0 28px 80px -24px rgba(0, 0, 0, 0.85);
+}
+
+[data-mode="light"] .parlo-floating-shell {
+  box-shadow:
+    16px 16px 36px rgba(163, 177, 198, 0.62),
+    -16px -16px 36px rgba(255, 255, 255, 0.72),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+/* 60x60px architectural precision grid */
+.parlo-grid-60 {
+  background-image:
+    linear-gradient(to right, var(--parlo-grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--parlo-grid-line) 1px, transparent 1px);
+  background-size: 60px 60px;
+}
+
+/* Grainy fractal noise SVG overlay (12% dark / 7% light) */
+.parlo-noise-overlay {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 240 240' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
+  opacity: 0.11;
+  mix-blend-mode: overlay;
+}
+
+[data-mode="light"] .parlo-noise-overlay {
+  opacity: 0.055;
+  mix-blend-mode: multiply;
+}
+
+/* 120px-blurred luminous glow-sphere gradients */
+.parlo-glow-sphere {
+  position: absolute;
+  border-radius: 9999px;
+  pointer-events: none;
+  filter: blur(118px);
+  will-change: transform, opacity;
+  transition: background 640ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.parlo-glow-sphere-primary {
+  background: radial-gradient(
+    circle at center,
+    color-mix(in srgb, var(--parlo-primary) 34%, transparent) 0%,
+    color-mix(in srgb, var(--parlo-glow) 18%, transparent) 48%,
+    transparent 74%
+  );
+}
+
+.parlo-glow-sphere-accent {
+  background: radial-gradient(
+    circle at center,
+    color-mix(in srgb, var(--parlo-accent) 28%, transparent) 0%,
+    color-mix(in srgb, var(--parlo-primary) 14%, transparent) 52%,
+    transparent 76%
+  );
+}
+
+[data-mode="light"] .parlo-glow-sphere-primary {
+  background: radial-gradient(
+    circle at center,
+    color-mix(in srgb, var(--parlo-primary) 16%, transparent) 0%,
+    color-mix(in srgb, var(--parlo-glow) 11%, transparent) 48%,
+    transparent 74%
+  );
+}
+
+[data-mode="light"] .parlo-glow-sphere-accent {
+  background: radial-gradient(
+    circle at center,
+    color-mix(in srgb, var(--parlo-accent) 13%, transparent) 0%,
+    color-mix(in srgb, var(--parlo-primary) 8%, transparent) 52%,
+    transparent 76%
+  );
+}
+
+/* Concentric architectural rings (Glass hairlines in Obsidian; Molded ceramic rings in Soft Ceramic) */
+.parlo-arch-ring-outer {
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 40px color-mix(in srgb, var(--parlo-primary) 7%, transparent);
+}
+
+.parlo-arch-ring-inner {
+  border-radius: 9999px;
+  border: 1px solid color-mix(in srgb, var(--parlo-primary) 18%, rgba(255, 255, 255, 0.04));
+}
+
+[data-mode="light"] .parlo-arch-ring-outer {
+  border: none;
+  background: var(--parlo-canvas);
+  box-shadow:
+    12px 12px 24px rgba(163, 177, 198, 0.42),
+    -12px -12px 24px rgba(255, 255, 255, 0.58);
+}
+
+[data-mode="light"] .parlo-arch-ring-inner {
+  border: none;
+  background: var(--parlo-canvas);
+  box-shadow:
+    inset 8px 8px 16px rgba(163, 177, 198, 0.42),
+    inset -8px -8px 16px rgba(255, 255, 255, 0.62);
+}
+
+/* Floating slow idle keyframes (compositor-only transform) */
+@keyframes parlo-float-slow {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -14px, 0);
+  }
+}
+
+.parlo-float-slow {
+  animation: parlo-float-slow 8s ease-in-out infinite;
+}
+
+/* ==========================================================================
+   3D Rolodex Word Flipper (unclipped preserve-3d stage)
+   ========================================================================== */
+.parlo-rolodex-stage {
+  display: inline-grid;
+  justify-items: start;
+  align-items: baseline;
+  vertical-align: baseline;
+  text-align: left;
+  perspective: 720px;
+  transform-style: preserve-3d;
+  overflow: visible;
+}
+
+.parlo-rolodex-item {
+  grid-area: 1 / 1;
+  justify-self: start;
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform-origin: 50% 50% -0.42em;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   GlowingEdgeCard (Pointer-tracking directional edge glow in Parlo palette)
+   ========================================================================== */
+.parlo-glow-card {
+  position: relative;
+  isolation: isolate;
+  --glow-sens: 24;
+  --color-sens: 42;
+  --pointer-x: 50%;
+  --pointer-y: 50%;
+  --pointer-deg: 120deg;
+  --pointer-d: 0;
+}
+
+.parlo-glow-card-border {
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  z-index: 0;
+  pointer-events: none;
+  padding: 1.5px;
+  background:
+    radial-gradient(at 80% 25%, var(--parlo-accent) 0px, transparent 58%),
+    radial-gradient(at 20% 75%, var(--parlo-primary) 0px, transparent 58%),
+    radial-gradient(at 50% 10%, color-mix(in srgb, var(--parlo-glow) 75%, var(--parlo-primary)) 0px, transparent 55%),
+    linear-gradient(135deg, var(--parlo-primary), var(--parlo-accent));
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: clamp(0, calc((var(--pointer-d) - var(--color-sens)) / (100 - var(--color-sens))), 1);
+  transition: opacity 0.3s ease-out;
+}
+
+.parlo-glow-card-halo {
+  position: absolute;
+  inset: -14px;
+  border-radius: inherit;
+  z-index: -1;
+  pointer-events: none;
+  background: conic-gradient(
+    from var(--pointer-deg) at 50% 50%,
+    color-mix(in srgb, var(--parlo-accent) 44%, transparent) 0deg,
+    color-mix(in srgb, var(--parlo-primary) 44%, transparent) 48deg,
+    transparent 115deg,
+    transparent 245deg,
+    color-mix(in srgb, var(--parlo-glow) 36%, transparent) 312deg,
+    color-mix(in srgb, var(--parlo-accent) 44%, transparent) 360deg
+  );
+  filter: blur(18px);
+  opacity: clamp(0, calc((var(--pointer-d) - var(--glow-sens)) / (100 - var(--glow-sens)) * 0.72), 0.72);
+  transition: opacity 0.3s ease-out;
+}
+
+.parlo-glow-card-wash {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(
+    360px circle at var(--pointer-x) var(--pointer-y),
+    color-mix(in srgb, var(--parlo-primary) 13%, transparent),
+    color-mix(in srgb, var(--parlo-accent) 7%, transparent) 42%,
+    transparent 72%
+  );
+  opacity: clamp(0, calc((var(--pointer-d) - 10) / 90), 1);
+  transition: opacity 0.35s ease-out;
+}
+
+.parlo-glow-card:not(:hover):not(.is-animating) .parlo-glow-card-border,
+.parlo-glow-card:not(:hover):not(.is-animating) .parlo-glow-card-halo,
+.parlo-glow-card:not(:hover):not(.is-animating) .parlo-glow-card-wash {
+  opacity: 0;
+  transition: opacity 0.65s ease-in-out;
+}
+
+/* ==========================================================================
+   GlowCtaButton (Duolingo Tactile Physical Lip + Neon Specular + Magnetic)
+   ========================================================================== */
+.parlo-glow-cta {
+  position: relative;
+  overflow: hidden;
+  --cta-x: 50%;
+  --cta-y: 50%;
+  --cta-opacity: 0;
+}
+
+.parlo-glow-cta::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    150px circle at var(--cta-x) var(--cta-y),
+    color-mix(in srgb, var(--parlo-glow) 46%, #ffffff 54%),
+    color-mix(in srgb, var(--parlo-accent) 22%, transparent) 52%,
+    transparent 76%
+  );
+  opacity: var(--cta-opacity);
+  transition: opacity 0.22s ease-out;
+}
+
+.parlo-glow-cta::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  background: radial-gradient(
+    110px circle at var(--cta-x) var(--cta-y),
+    color-mix(in srgb, #ffffff 82%, var(--parlo-glow)),
+    transparent 75%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: var(--cta-opacity);
+  transition: opacity 0.22s ease-out;
+}
+
+/* Tactile physical 4px bottom-lip keycap (Duolingo press depth + Luminous glow) */
+.parlo-keycap-cta {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.36),
+    0 3.5px 0 0 var(--parlo-keycap-lip),
+    0 12px 30px -8px color-mix(in srgb, var(--parlo-primary) 55%, transparent);
+  transition: transform 140ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 180ms ease;
+}
+
+.parlo-keycap-cta:hover {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.48),
+    0 4px 0 0 var(--parlo-keycap-lip),
+    0 16px 36px -6px color-mix(in srgb, var(--parlo-primary) 68%, transparent);
+}
+
+.parlo-keycap-cta:active {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 1px 0 0 var(--parlo-keycap-lip),
+    0 4px 10px -4px color-mix(in srgb, var(--parlo-primary) 45%, transparent);
+}
+
+.parlo-cta-beam {
+  position: absolute;
+  inset: -40% auto -40% -35%;
+  width: 34%;
+  pointer-events: none;
+  z-index: 2;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.32) 50%,
+    transparent 100%
+  );
+  transform: skewX(-24deg) translateX(-140%);
+  transition: transform 720ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.parlo-keycap-cta:hover .parlo-cta-beam {
+  transform: skewX(-24deg) translateX(520%);
+}
+
+/* ==========================================================================
+   Dual-Finish Hardware Surfaces:
+   - Obsidian Glass ([data-mode="dark"]): 16px frosted glass + crisp luminous border
+   - Soft Ceramic ([data-mode="light"]): Authentic dual opposing RGBA Neumorphism
+   ========================================================================== */
+.parlo-machined-frame,
+.parlo-surface-elevated {
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 18px 44px -18px rgba(0, 0, 0, 0.78);
+  transition: border-color 260ms ease, box-shadow 260ms ease, background-color 260ms ease;
+}
+
+[data-mode="light"] .parlo-machined-frame,
+[data-mode="light"] .parlo-surface-elevated {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-color: transparent;
+  box-shadow:
+    9px 9px 18px rgba(163, 177, 198, 0.56),
+    -9px -9px 18px rgba(255, 255, 255, 0.68),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.parlo-card-tactile {
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 20px 48px -18px rgba(0, 0, 0, 0.85);
+}
+
+[data-mode="light"] .parlo-card-tactile {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-color: transparent;
+  box-shadow:
+    12px 12px 24px rgba(163, 177, 198, 0.62),
+    -12px -12px 24px rgba(255, 255, 255, 0.72);
+}
+
+/* Carved Recessed Control Wells & Acoustic Chamber */
+.parlo-well-recessed {
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.58),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+}
+
+[data-mode="light"] .parlo-well-recessed {
+  border-color: transparent;
+  box-shadow:
+    inset 5px 5px 10px rgba(163, 177, 198, 0.54),
+    inset -5px -5px 10px rgba(255, 255, 255, 0.68);
+}
+
+.parlo-stage-chamber {
+  background-color: var(--parlo-stage-bg);
+  box-shadow:
+    inset 0 2px 10px rgba(0, 0, 0, 0.45),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+}
+
+[data-mode="light"] .parlo-stage-chamber {
+  box-shadow:
+    inset 7px 7px 14px rgba(163, 177, 198, 0.52),
+    inset -7px -7px 14px rgba(255, 255, 255, 0.65);
+}
+
+.parlo-keycap-thumb {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 3px 10px rgba(0, 0, 0, 0.5);
+}
+
+[data-mode="light"] .parlo-keycap-thumb {
+  box-shadow:
+    4px 4px 8px rgba(163, 177, 198, 0.52),
+    -4px -4px 8px rgba(255, 255, 255, 0.72),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+
+/* Floating Pill Navigation Track */
+.parlo-nav-pill {
+  background-color: var(--parlo-nav-pill);
+  border: 1px solid var(--parlo-border);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+[data-mode="light"] .parlo-nav-pill {
+  border-color: transparent;
+  box-shadow:
+    inset 4px 4px 9px rgba(163, 177, 198, 0.48),
+    inset -4px -4px 9px rgba(255, 255, 255, 0.68);
+}
+
+.parlo-nav-island {
+  box-shadow:
+    inset 0 -1px 0 rgba(255, 255, 255, 0.06),
+    0 14px 36px -14px rgba(0, 0, 0, 0.62);
+}
+
+[data-mode="light"] .parlo-nav-island {
+  border-color: transparent;
+  box-shadow:
+    0 8px 20px -10px rgba(163, 177, 198, 0.5),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.7);
+}
+
+/* Magnetic 3D Tilt Cards (Glassmorphism in Dark, Neumorphic Extrusion in Light) */
+.parlo-tilt-card {
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 12px 30px -14px rgba(0, 0, 0, 0.72);
+  transition: box-shadow 260ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 260ms ease;
+}
+
+.parlo-tilt-card.is-tilted {
+  border-color: color-mix(in srgb, var(--parlo-primary) 52%, rgba(255, 255, 255, 0.14));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 12px 34px -10px color-mix(in srgb, var(--parlo-primary) 28%, transparent),
+    0 28px 56px -18px rgba(0, 0, 0, 0.9);
+}
+
+[data-mode="light"] .parlo-tilt-card {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-color: transparent;
+  box-shadow:
+    8px 8px 16px rgba(163, 177, 198, 0.56),
+    -8px -8px 16px rgba(255, 255, 255, 0.68);
+}
+
+[data-mode="light"] .parlo-tilt-card.is-tilted {
+  box-shadow:
+    14px 14px 26px rgba(163, 177, 198, 0.66),
+    -14px -14px 26px rgba(255, 255, 255, 0.76),
+    0 10px 24px -12px color-mix(in srgb, var(--parlo-primary) 24%, transparent);
+}
+
+.parlo-spotlight-rim {
+  padding: 1.5px;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+/* ==========================================================================
+   Clean Sculptural ParloLogo Vessel
+   ========================================================================== */
+.parlo-logo-vessel {
+  background: linear-gradient(
+    155deg,
+    var(--parlo-primary) 0%,
+    color-mix(in srgb, var(--parlo-primary) 68%, #07080b) 100%
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.36),
+    inset 0 -1.5px 0 rgba(0, 0, 0, 0.32),
+    0 4px 14px -4px color-mix(in srgb, var(--parlo-primary) 52%, transparent);
+  transition: box-shadow 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-mode="light"] .parlo-logo-vessel {
+  background: linear-gradient(
+    155deg,
+    color-mix(in srgb, var(--parlo-ink) 82%, var(--parlo-primary)) 0%,
+    var(--parlo-ink) 100%
+  );
+  box-shadow:
+    5px 5px 11px rgba(163, 177, 198, 0.65),
+    -4px -4px 10px rgba(255, 255, 255, 0.72),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.parlo-logo-vessel.is-live {
+  background: linear-gradient(
+    155deg,
+    var(--parlo-primary) 0%,
+    color-mix(in srgb, var(--parlo-accent) 45%, var(--parlo-primary)) 100%
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.38),
+    0 0 0 2px color-mix(in srgb, var(--parlo-primary) 32%, transparent),
+    0 8px 22px -4px color-mix(in srgb, var(--parlo-primary) 58%, transparent);
+}
+
+/* ==========================================================================
+   3D Physical Flashcard Flip Stage (Phrasebook)
+   ========================================================================== */
+.parlo-flip-scene {
+  perspective: 1400px;
+}
+
+.parlo-flip-card {
+  transform-style: preserve-3d;
+  position: relative;
+}
+
+.parlo-flip-face {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform-style: preserve-3d;
+}
+
+.parlo-flip-back {
+  transform: rotateY(180deg);
+}
+
+/* ==========================================================================
+   Subtle Streak Flame Flicker (Only when streak is active)
+   ========================================================================== */
+@keyframes parlo-flame-sway {
+  0%,
+  100% {
+    transform: scale(1) rotate(-3deg);
+  }
+  50% {
+    transform: scale(1.09) rotate(4deg);
+  }
+}
+
+.parlo-flame-active {
+  animation: parlo-flame-sway 2.8s ease-in-out infinite;
+  transform-origin: 50% 80%;
+}
+
+/* ==========================================================================
+   Dataset-Driven CSS-Masked Cultural Motif Overlays
+   (SVG mask patterns & tile dimensions are dynamically injected from
+    CULTURAL_THEMES in src/lib/cultures.ts via syncCulturalMotifCssVariables)
+   ========================================================================== */
+@keyframes parlo-motif-drift {
+  0%,
+  100% {
+    -webkit-mask-position: 0px 0px, center;
+    mask-position: 0px 0px, center;
+  }
+  50% {
+    -webkit-mask-position: 10px 6px, center;
+    mask-position: 10px 6px, center;
+  }
+}
+
+.parlo-motif-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  border-radius: inherit;
+  --motif-size: var(--parlo-motif-size, 48px 48px);
+  --motif-pattern: var(--parlo-motif-pattern, none);
+  --motif-fade: radial-gradient(
+    ellipse 64% 88% at 96% 10%,
+    rgba(0, 0, 0, 1) 0%,
+    rgba(0, 0, 0, 0.35) 45%,
+    transparent 80%
+  );
+  background: linear-gradient(
+    135deg,
+    var(--parlo-primary) 0%,
+    color-mix(in srgb, var(--parlo-primary) 54%, var(--parlo-accent)) 62%,
+    var(--parlo-accent) 100%
+  );
+  -webkit-mask-image: var(--motif-pattern), var(--motif-fade);
+  mask-image: var(--motif-pattern), var(--motif-fade);
+  -webkit-mask-size: var(--motif-size), 100% 100%;
+  mask-size: var(--motif-size), 100% 100%;
+  -webkit-mask-repeat: repeat, no-repeat;
+  mask-repeat: repeat, no-repeat;
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  opacity: 0.09;
+  animation: parlo-motif-drift 18s ease-in-out infinite;
+  transition: opacity 360ms ease, background 420ms ease;
+}
+
+.parlo-motif-corner {
+  --motif-fade: radial-gradient(
+    ellipse 58% 86% at 96% 10%,
+    rgba(0, 0, 0, 1) 0%,
+    rgba(0, 0, 0, 0.35) 44%,
+    transparent 78%
+  );
+  opacity: 0.09;
+}
+
+.parlo-motif-header {
+  --motif-fade: radial-gradient(
+    ellipse 52% 110% at 94% 40%,
+    rgba(0, 0, 0, 1) 0%,
+    rgba(0, 0, 0, 0.35) 46%,
+    transparent 80%
+  );
+  opacity: 0.085;
+}
+
+.parlo-motif-card-subtle {
+  --motif-fade: radial-gradient(
+    ellipse 64% 80% at 94% 92%,
+    rgba(0, 0, 0, 1) 0%,
+    rgba(0, 0, 0, 0.35) 42%,
+    transparent 78%
+  );
+  opacity: 0.085;
+}
+
+.parlo-motif-dark {
+  background: linear-gradient(
+    135deg,
+    var(--parlo-on-solid) 0%,
+    color-mix(in srgb, var(--parlo-on-solid) 72%, var(--parlo-accent)) 100%
+  );
+  opacity: 0.11;
+}
+
+/* Per-card cultural motif bindings resolved dynamically from CULTURAL_THEMES */
+.parlo-motif-overlay[data-culture="es"] {
+  --motif-size: var(--parlo-motif-size-es, 52px 52px);
+  --motif-pattern: var(--parlo-motif-pattern-es, var(--parlo-motif-pattern));
+}
+
+.parlo-motif-overlay[data-culture="fr"] {
+  --motif-size: var(--parlo-motif-size-fr, 48px 48px);
+  --motif-pattern: var(--parlo-motif-pattern-fr, var(--parlo-motif-pattern));
+}
+
+.parlo-motif-overlay[data-culture="ja"] {
+  --motif-size: var(--parlo-motif-size-ja, 56px 32px);
+  --motif-pattern: var(--parlo-motif-pattern-ja, var(--parlo-motif-pattern));
+}
+
+.parlo-motif-overlay[data-culture="de"] {
+  --motif-size: var(--parlo-motif-size-de, 48px 48px);
+  --motif-pattern: var(--parlo-motif-pattern-de, var(--parlo-motif-pattern));
+}
+
+.parlo-motif-overlay[data-culture="it"] {
+  --motif-size: var(--parlo-motif-size-it, 48px 40px);
+  --motif-pattern: var(--parlo-motif-pattern-it, var(--parlo-motif-pattern));
+}
+
+.parlo-motif-overlay[data-culture="zh"] {
+  --motif-size: var(--parlo-motif-size-zh, 48px 48px);
+  --motif-pattern: var(--parlo-motif-pattern-zh, var(--parlo-motif-pattern));
+}
+
+.parlo-motif-overlay[data-culture="ko"] {
+  --motif-size: var(--parlo-motif-size-ko, 44px 44px);
+  --motif-pattern: var(--parlo-motif-pattern-ko, var(--parlo-motif-pattern));
+}
+
+.parlo-motif-overlay[data-culture="pt"] {
+  --motif-size: var(--parlo-motif-size-pt, 50px 50px);
+  --motif-pattern: var(--parlo-motif-pattern-pt, var(--parlo-motif-pattern));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
