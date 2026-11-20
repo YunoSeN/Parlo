@@ -1,4 +1,5 @@
 import { MutableRefObject, useCallback, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
@@ -17,13 +18,17 @@ import { LANGUAGES } from "../data/catalog";
 import { LiveConnectionState } from "../hooks/useLivePartner";
 import { speakWithBrowserTts } from "../lib/audio";
 import { getCultureByLanguage } from "../lib/cultures";
-import { buildScenarioDiorama } from "../three/buildScenarioDiorama";
+import { playClickSfx } from "../lib/sfx";
+import { buildRoomDiorama } from "../three/buildCulturalRooms";
+import { BuiltDiorama } from "../three/buildScenarioDiorama";
 import {
   getPropLocalizedTerm,
-  SPATIAL_PROPS,
+  getRecommendedRoomForLanguage,
+  getSpatialRoomById,
+  SPATIAL_ROOMS,
   SpatialPropEntry,
 } from "../three/dioramaCatalog";
-import { LanguageOption } from "../types";
+import { LanguageOption, SpatialRoomId } from "../types";
 import { LightRays } from "./LightRays";
 
 interface SpatialSceneViewProps {
@@ -48,9 +53,6 @@ interface SpatialSceneViewProps {
   onOpenStudio: () => void;
   onSelectLanguage?: (code: string) => void;
 }
-
-const DEFAULT_CAMERA_POS = new THREE.Vector3(0.1, 2.35, 4.35);
-const DEFAULT_TARGET_POS = new THREE.Vector3(0, 0.35, 0.1);
 
 // Pre-allocated scratch math helpers (zero GC inside animation loop)
 const _mouse = new THREE.Vector2();
@@ -90,9 +92,27 @@ export function SpatialSceneView({
 }: SpatialSceneViewProps) {
   const culture = getCultureByLanguage(language.code);
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
-  const [selectedPropId, setSelectedPropId] = useState<string>("espresso");
+
+  const [activeRoomId, setActiveRoomId] = useState<SpatialRoomId>(() =>
+    getRecommendedRoomForLanguage(language.code)
+  );
+  const activeRoom = getSpatialRoomById(activeRoomId);
+
+  const [selectedPropId, setSelectedPropId] = useState<string>(
+    () => activeRoom.props[0].id
+  );
   const [dockOpen, setDockOpen] = useState(true);
   const [webglLost, setWebglLost] = useState(false);
+
+  // Sync recommended 3D room when user switches languages
+  const prevLangRef = useRef<string>(language.code);
+  useEffect(() => {
+    if (prevLangRef.current !== language.code) {
+      prevLangRef.current = language.code;
+      const nextRoomId = getRecommendedRoomForLanguage(language.code);
+      setActiveRoomId(nextRoomId);
+    }
+  }, [language.code]);
 
   // Resolve active culture primary & accent colors directly from root CSS variables
   const [atmospherePalette, setAtmospherePalette] = useState<{
@@ -107,23 +127,61 @@ export function SpatialSceneView({
 
   const selectedPropRef = useRef<string>(selectedPropId);
   const hoveredPropRef = useRef<string | null>(null);
+  const activePropsRef = useRef<SpatialPropEntry[]>(activeRoom.props);
   const cameraGlideRef = useRef<{
     active: boolean;
     pos: THREE.Vector3;
     target: THREE.Vector3;
   }>({
     active: false,
-    pos: DEFAULT_CAMERA_POS.clone(),
-    target: DEFAULT_TARGET_POS.clone(),
+    pos: new THREE.Vector3(...activeRoom.defaultCameraPos),
+    target: new THREE.Vector3(...activeRoom.defaultTargetPos),
   });
   const connectionStateRef = useRef(connectionState);
   const isPartnerSpeakingRef = useRef(isPartnerSpeaking);
-  const sceneAtmosphereRef = useRef<{
+
+  // Persistent Three.js runtime references for hot-swapping 3D rooms without recreating WebGLRenderer
+  const stageRuntimeRef = useRef<{
+    scene: THREE.Scene;
+    camera: THREE.PerspectiveCamera;
+    renderer: THREE.WebGLRenderer;
     rimLight: THREE.DirectionalLight;
-    studioFloorMaterial: THREE.MeshStandardMaterial;
+    lampPoint: THREE.PointLight;
+    diorama: BuiltDiorama;
+    maxAnisotropy: number;
+    isSoftwareGl: boolean;
+    roomId: SpatialRoomId;
   } | null>(null);
 
-  // Sync LightRays & 3D stage rim lighting from live CSS variables (--parlo-primary / --parlo-accent)
+  const applyFloorAndRimPalette = useCallback(
+    (
+      rimLight: THREE.DirectionalLight,
+      floorMaterial: THREE.MeshStandardMaterial
+    ) => {
+      const root = document.documentElement;
+      const styles = getComputedStyle(root);
+      const isDarkMode = root.dataset.mode !== "light";
+      const rawPrimary = styles.getPropertyValue("--parlo-primary").trim();
+      const isSimpleColor = (v: string) =>
+        /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v) || /^rgba?\(/i.test(v);
+      const fallbackPrimary = isDarkMode
+        ? culture.darkPrimaryHex
+        : culture.primaryHex;
+      const primary = isSimpleColor(rawPrimary) ? rawPrimary : fallbackPrimary;
+
+      try {
+        rimLight.color.set(primary);
+        rimLight.intensity = isDarkMode ? 0.95 : 0.65;
+        floorMaterial.color.set(isDarkMode ? 0x151923 : 0xdce3ec);
+        floorMaterial.opacity = isDarkMode ? 0.9 : 0.94;
+      } catch {
+        // Ignore non-standard CSS colors
+      }
+    },
+    [culture.darkPrimaryHex, culture.primaryHex]
+  );
+
+  // Sync LightRays & 3D stage rim lighting from live CSS variables
   useEffect(() => {
     let rafSyncId = 0;
 
@@ -138,10 +196,13 @@ export function SpatialSceneView({
         ? culture.darkAccentHex
         : culture.accentHex;
 
-      const primary =
-        styles.getPropertyValue("--parlo-primary").trim() || fallbackPrimary;
-      const accent =
-        styles.getPropertyValue("--parlo-accent").trim() || fallbackAccent;
+      const rawPrimary = styles.getPropertyValue("--parlo-primary").trim();
+      const rawAccent = styles.getPropertyValue("--parlo-accent").trim();
+      const isSimpleColor = (v: string) =>
+        /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v) || /^rgba?\(/i.test(v);
+
+      const primary = isSimpleColor(rawPrimary) ? rawPrimary : fallbackPrimary;
+      const accent = isSimpleColor(rawAccent) ? rawAccent : fallbackAccent;
 
       setAtmospherePalette((prev) =>
         prev.primary === primary &&
@@ -151,24 +212,16 @@ export function SpatialSceneView({
           : { primary, accent, isDark: isDarkMode }
       );
 
-      if (sceneAtmosphereRef.current) {
-        try {
-          sceneAtmosphereRef.current.rimLight.color.set(primary);
-          sceneAtmosphereRef.current.rimLight.intensity = isDarkMode ? 0.95 : 0.65;
-          sceneAtmosphereRef.current.studioFloorMaterial.color.set(
-            isDarkMode ? 0x151923 : 0xdce3ec
-          );
-          sceneAtmosphereRef.current.studioFloorMaterial.opacity = isDarkMode
-            ? 0.9
-            : 0.94;
-        } catch {
-          // Ignore non-standard CSS color formats in Three.Color
-        }
+      const runtime = stageRuntimeRef.current;
+      if (runtime) {
+        applyFloorAndRimPalette(
+          runtime.rimLight,
+          runtime.diorama.studioFloorMaterial
+        );
       }
     };
 
     readCultureCssVars();
-    // Re-read after App's culture/mode dataset effect commits
     rafSyncId = requestAnimationFrame(readCultureCssVars);
 
     const observer = new MutationObserver(() => {
@@ -184,6 +237,7 @@ export function SpatialSceneView({
       observer.disconnect();
     };
   }, [
+    applyFloorAndRimPalette,
     culture.accentHex,
     culture.darkAccentHex,
     culture.darkPrimaryHex,
@@ -194,6 +248,10 @@ export function SpatialSceneView({
   useEffect(() => {
     selectedPropRef.current = selectedPropId;
   }, [selectedPropId]);
+
+  useEffect(() => {
+    activePropsRef.current = activeRoom.props;
+  }, [activeRoom.props]);
 
   useEffect(() => {
     connectionStateRef.current = connectionState;
@@ -217,12 +275,13 @@ export function SpatialSceneView({
   }, []);
 
   const resetCamera = useCallback(() => {
+    const room = getSpatialRoomById(activeRoomId);
     cameraGlideRef.current = {
       active: true,
-      pos: DEFAULT_CAMERA_POS.clone(),
-      target: DEFAULT_TARGET_POS.clone(),
+      pos: new THREE.Vector3(...room.defaultCameraPos),
+      target: new THREE.Vector3(...room.defaultTargetPos),
     };
-  }, []);
+  }, [activeRoomId]);
 
   // Keyboard shortcut 'H' to toggle HUD dock
   useEffect(() => {
@@ -241,11 +300,51 @@ export function SpatialSceneView({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  // Hot-swap 3D room diorama cleanly with complete GPU disposal when activeRoomId changes
+  useEffect(() => {
+    const room = getSpatialRoomById(activeRoomId);
+    activePropsRef.current = room.props;
+    setSelectedPropId(room.props[0].id);
+    selectedPropRef.current = room.props[0].id;
+    hoveredPropRef.current = null;
+
+    const runtime = stageRuntimeRef.current;
+    if (!runtime || runtime.roomId === activeRoomId) return;
+
+    runtime.scene.remove(runtime.diorama.root);
+    runtime.diorama.dispose();
+
+    const nextDiorama = buildRoomDiorama(activeRoomId, runtime.maxAnisotropy);
+    runtime.scene.add(nextDiorama.root);
+    runtime.diorama = nextDiorama;
+    runtime.roomId = activeRoomId;
+
+    runtime.lampPoint.position.set(...room.lampLightPos);
+    runtime.lampPoint.color.setHex(room.lampLightColor);
+    runtime.lampPoint.intensity = room.lampLightIntensity;
+
+    applyFloorAndRimPalette(
+      runtime.rimLight,
+      nextDiorama.studioFloorMaterial
+    );
+
+    if (!runtime.isSoftwareGl) {
+      runtime.renderer.compile(runtime.scene, runtime.camera);
+    }
+
+    cameraGlideRef.current = {
+      active: true,
+      pos: new THREE.Vector3(...room.defaultCameraPos),
+      target: new THREE.Vector3(...room.defaultTargetPos),
+    };
+  }, [activeRoomId, applyFloorAndRimPalette]);
+
   // Isolated single-mount Three.js lifecycle
   useEffect(() => {
     const mount = canvasMountRef.current;
     if (!mount) return;
 
+    const initialRoom = getSpatialRoomById(activeRoomId);
     const isSoftwareGl = detectSoftwareWebGL();
     const reducedMotion = window.matchMedia(
       "(prefers-reduced-motion: reduce)"
@@ -309,10 +408,10 @@ export function SpatialSceneView({
       0.1,
       60
     );
-    camera.position.copy(DEFAULT_CAMERA_POS);
+    camera.position.set(...initialRoom.defaultCameraPos);
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.copy(DEFAULT_TARGET_POS);
+    controls.target.set(...initialRoom.defaultTargetPos);
     controls.enableDamping = !isSoftwareGl;
     controls.dampingFactor = 0.07;
     controls.minDistance = 1.7;
@@ -321,7 +420,6 @@ export function SpatialSceneView({
     controls.minPolarAngle = 0.25;
     controls.enablePan = false;
 
-    // Cancel scripted camera glide immediately when user drags manually
     controls.addEventListener("start", () => {
       cameraGlideRef.current.active = false;
     });
@@ -351,43 +449,38 @@ export function SpatialSceneView({
     rimLight.position.set(-4.2, 3.4, -4.5);
     scene.add(rimLight);
 
-    // Subtle warm local glow from the brass lamp
-    const lampPoint = new THREE.PointLight(0xffd7a1, 1.1, 4.2, 2);
-    lampPoint.position.set(1.08, 1.05, -0.54);
+    const lampPoint = new THREE.PointLight(
+      initialRoom.lampLightColor,
+      initialRoom.lampLightIntensity,
+      4.5,
+      2
+    );
+    lampPoint.position.set(...initialRoom.lampLightPos);
     scene.add(lampPoint);
 
-    // Build procedural 3D café tabletop diorama
-    const diorama = buildScenarioDiorama(
-      renderer.capabilities.getMaxAnisotropy()
-    );
-    scene.add(diorama.root);
+    const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
+    const initialDiorama = buildRoomDiorama(initialRoom.id, maxAnisotropy);
+    scene.add(initialDiorama.root);
 
-    // Apply initial atmosphere tint to floor & rim light from active root CSS variables
-    const rootEl = document.documentElement;
-    const isDarkInit = rootEl.dataset.mode !== "light";
-    const initPrimaryCss = getComputedStyle(rootEl)
-      .getPropertyValue("--parlo-primary")
-      .trim();
-    if (initPrimaryCss) {
-      try {
-        rimLight.color.set(initPrimaryCss);
-      } catch {
-        // Keep default cool rim light
-      }
-    }
-    rimLight.intensity = isDarkInit ? 0.95 : 0.65;
-    diorama.studioFloorMaterial.color.set(isDarkInit ? 0x151923 : 0xdce3ec);
-    diorama.studioFloorMaterial.opacity = isDarkInit ? 0.9 : 0.94;
-    sceneAtmosphereRef.current = {
+    applyFloorAndRimPalette(rimLight, initialDiorama.studioFloorMaterial);
+
+    stageRuntimeRef.current = {
+      scene,
+      camera,
+      renderer,
       rimLight,
-      studioFloorMaterial: diorama.studioFloorMaterial,
+      lampPoint,
+      diorama: initialDiorama,
+      maxAnisotropy,
+      isSoftwareGl,
+      roomId: initialRoom.id,
     };
 
     if (!isSoftwareGl) {
       renderer.compile(scene, camera);
     }
 
-    // Raycasting for prop hover & click selection
+    // Raycasting for prop hover & click selection (reads active diorama from ref)
     const raycaster = new THREE.Raycaster();
     let pointerDownX = 0;
     let pointerDownY = 0;
@@ -405,21 +498,24 @@ export function SpatialSceneView({
     };
 
     const onPointerUp = (e: PointerEvent) => {
-      // Ignore orbit drag gestures
       const moved = Math.hypot(
         e.clientX - pointerDownX,
         e.clientY - pointerDownY
       );
       if (moved > 7) return;
 
+      const activeDiorama = stageRuntimeRef.current?.diorama;
+      if (!activeDiorama) return;
+
       updateNormalizedMouse(e.clientX, e.clientY);
       raycaster.setFromCamera(_mouse, camera);
-      const hits = raycaster.intersectObjects(diorama.interactables, false);
+      const hits = raycaster.intersectObjects(activeDiorama.interactables, false);
       if (hits.length > 0) {
         const hitPropId = hits[0].object.userData.propId as string | undefined;
         if (hitPropId) {
-          const prop = SPATIAL_PROPS.find((p) => p.id === hitPropId);
+          const prop = activePropsRef.current.find((p) => p.id === hitPropId);
           if (prop) {
+            playClickSfx();
             focusProp(prop);
           }
         }
@@ -431,9 +527,12 @@ export function SpatialSceneView({
       if (now - lastHoverCheck < 55) return;
       lastHoverCheck = now;
 
+      const activeDiorama = stageRuntimeRef.current?.diorama;
+      if (!activeDiorama) return;
+
       updateNormalizedMouse(e.clientX, e.clientY);
       raycaster.setFromCamera(_mouse, camera);
-      const hits = raycaster.intersectObjects(diorama.interactables, false);
+      const hits = raycaster.intersectObjects(activeDiorama.interactables, false);
       const hitId =
         hits.length > 0
           ? ((hits[0].object.userData.propId as string | undefined) ?? null)
@@ -446,7 +545,6 @@ export function SpatialSceneView({
     renderer.domElement.addEventListener("pointerup", onPointerUp);
     renderer.domElement.addEventListener("pointermove", onPointerMove);
 
-    // ResizeObserver for crisp viewport containment
     const resizeObserver = new ResizeObserver(() => {
       const w = Math.max(1, mount.clientWidth);
       const h = Math.max(1, mount.clientHeight);
@@ -456,7 +554,6 @@ export function SpatialSceneView({
     });
     resizeObserver.observe(mount);
 
-    // Animation loop with software WebGL fence-sync pacing
     let frameId = 0;
     const clock = new THREE.Clock();
 
@@ -488,8 +585,8 @@ export function SpatialSceneView({
       if (disposed) return;
       const dt = Math.min(clock.getDelta(), 0.1);
       const elapsed = clock.getElapsedTime();
+      const activeDiorama = stageRuntimeRef.current?.diorama;
 
-      // Smooth exponential camera glide toward focused prop
       if (cameraGlideRef.current.active) {
         const alpha = reducedMotion ? 1 : 1 - Math.exp(-5.5 * dt);
         _desiredCamPos.copy(cameraGlideRef.current.pos);
@@ -506,120 +603,128 @@ export function SpatialSceneView({
         }
       }
 
-      // Spring-damped lift + subtle showcase breathing on hovered/selected props
-      for (const [id, group] of diorama.propGroups.entries()) {
-        const isSelected = id === selectedPropRef.current;
-        const isHovered = id === hoveredPropRef.current;
-        const baseRotY = diorama.propBaseRotY.get(id) ?? 0;
+      if (activeDiorama) {
+        for (const [id, group] of activeDiorama.propGroups.entries()) {
+          const isSelected = id === selectedPropRef.current;
+          const isHovered = id === hoveredPropRef.current;
+          const baseRotY = activeDiorama.propBaseRotY.get(id) ?? 0;
 
-        const targetY = isSelected
-          ? 0.042 + (reducedMotion ? 0 : Math.sin(elapsed * 2.1) * 0.008)
-          : isHovered
-          ? 0.024
-          : 0;
-        const targetScale = isSelected ? 1.035 : isHovered ? 1.02 : 1.0;
-        const targetRotY =
-          isSelected && !reducedMotion
-            ? baseRotY + Math.sin(elapsed * 0.9) * 0.14
-            : isHovered && !reducedMotion
-            ? baseRotY + 0.06
-            : baseRotY;
+          const targetY = isSelected
+            ? 0.042 + (reducedMotion ? 0 : Math.sin(elapsed * 2.1) * 0.008)
+            : isHovered
+            ? 0.024
+            : 0;
+          const targetScale = isSelected ? 1.035 : isHovered ? 1.02 : 1.0;
+          const targetRotY =
+            isSelected && !reducedMotion
+              ? baseRotY + Math.sin(elapsed * 0.9) * 0.14
+              : isHovered && !reducedMotion
+              ? baseRotY + 0.06
+              : baseRotY;
 
-        group.position.y = THREE.MathUtils.damp(group.position.y, targetY, 8.5, dt);
-        const nextScale = THREE.MathUtils.damp(group.scale.x, targetScale, 9, dt);
-        group.scale.setScalar(nextScale);
-        group.rotation.y = THREE.MathUtils.damp(group.rotation.y, targetRotY, 6, dt);
-      }
-
-      // Glide orbital selection beacon smoothly beneath focused prop
-      const focusedSpec =
-        SPATIAL_PROPS.find((p) => p.id === selectedPropRef.current) ??
-        SPATIAL_PROPS[0];
-      diorama.selectionBeacon.position.x = THREE.MathUtils.damp(
-        diorama.selectionBeacon.position.x,
-        focusedSpec.position[0],
-        7.5,
-        dt
-      );
-      diorama.selectionBeacon.position.z = THREE.MathUtils.damp(
-        diorama.selectionBeacon.position.z,
-        focusedSpec.position[2],
-        7.5,
-        dt
-      );
-      if (!reducedMotion) {
-        diorama.beaconOuterRing.rotation.z += dt * 0.45;
-        diorama.beaconInnerRing.rotation.z -= dt * 0.85;
-        const beaconPulse = 1 + Math.sin(elapsed * 2.4) * 0.035;
-        diorama.selectionBeacon.scale.set(beaconPulse, 1, beaconPulse);
-      }
-
-      // Acoustic resonance totem (3 nested gyroscopic rings + breathing core)
-      const liveEnergy =
-        connectionStateRef.current === "live"
-          ? Math.max(userLevelRef.current, partnerLevelRef.current)
-          : 0;
-      const [outerRing, innerRing, coreSphere, midRing] = diorama.resonanceRings;
-      if (!reducedMotion) {
-        const spinSpeed = 0.34 + liveEnergy * 2.4;
-        outerRing.rotation.y += dt * spinSpeed;
-        outerRing.rotation.x = Math.sin(elapsed * 0.65) * 0.22;
-        if (midRing) {
-          midRing.rotation.z += dt * (spinSpeed * 1.15);
-          midRing.rotation.y = Math.cos(elapsed * 0.7) * 0.42;
-        }
-        innerRing.rotation.x += dt * (spinSpeed * 1.55);
-        innerRing.rotation.z = Math.cos(elapsed * 0.85) * 0.28;
-      }
-      const targetScale = 1 + liveEnergy * 0.34 + (reducedMotion ? 0 : Math.sin(elapsed * 2.2) * 0.03);
-      const s = THREE.MathUtils.damp(coreSphere.scale.x, targetScale, 12, dt);
-      coreSphere.scale.setScalar(s);
-
-      // Organic 3D rising steam wisps above espresso cup & gooseneck kettle
-      if (!reducedMotion) {
-        for (let i = 0; i < diorama.steamPuffs.length; i++) {
-          const puff = diorama.steamPuffs[i];
-          const life = (elapsed * puff.speed + puff.phase) % 1;
-          const swirl = elapsed * 1.6 + puff.phase * Math.PI * 2;
-          puff.mesh.position.set(
-            puff.origin[0] + Math.sin(swirl) * puff.driftRadius * life,
-            puff.origin[1] + life * puff.maxHeight,
-            puff.origin[2] + Math.cos(swirl * 0.8) * puff.driftRadius * life
+          group.position.y = THREE.MathUtils.damp(group.position.y, targetY, 8.5, dt);
+          const nextScale = THREE.MathUtils.damp(group.scale.x, targetScale, 9, dt);
+          group.scale.setScalar(nextScale);
+          group.rotation.y = THREE.MathUtils.damp(
+            group.rotation.y,
+            targetRotY,
+            6,
+            dt
           );
-          const puffScale = 0.45 + life * 1.35;
-          puff.mesh.scale.set(puffScale, puffScale * 1.15, puffScale);
-          // Smooth bell-curve fade in & out
-          puff.material.opacity = Math.sin(life * Math.PI) * 0.22;
         }
 
-        // Gently drifting golden café dust motes (zero GC via pre-allocated _moteDummy)
-        const moteBoost = 1 + liveEnergy * 1.8;
-        for (let i = 0; i < diorama.dustMoteSpecs.length; i++) {
-          const spec = diorama.dustMoteSpecs[i];
-          const t = elapsed * spec.speed * moteBoost + spec.phase;
-          _moteDummy.position.set(
-            spec.baseX + Math.sin(t * 0.7) * spec.radius,
-            spec.baseY + Math.cos(t * 0.55) * (spec.radius * 0.65),
-            spec.baseZ + Math.cos(t * 0.65) * spec.radius
+        const roomProps = activePropsRef.current;
+        const focusedSpec =
+          roomProps.find((p) => p.id === selectedPropRef.current) ??
+          roomProps[0];
+        if (focusedSpec) {
+          activeDiorama.selectionBeacon.position.x = THREE.MathUtils.damp(
+            activeDiorama.selectionBeacon.position.x,
+            focusedSpec.position[0],
+            7.5,
+            dt
           );
-          const twinkle = spec.scale * (0.75 + Math.sin(t * 1.8) * 0.25);
-          _moteDummy.scale.setScalar(twinkle);
-          _moteDummy.updateMatrix();
-          diorama.dustMotes.setMatrixAt(i, _moteDummy.matrix);
+          activeDiorama.selectionBeacon.position.z = THREE.MathUtils.damp(
+            activeDiorama.selectionBeacon.position.z,
+            focusedSpec.position[2],
+            7.5,
+            dt
+          );
         }
-        diorama.dustMotes.instanceMatrix.needsUpdate = true;
-      }
 
-      // Subtle warm glow feedback on reading lamp during live partner speech
-      const targetEmissive = isPartnerSpeakingRef.current
-        ? 2.2
-        : 1.45 + (reducedMotion ? 0 : Math.sin(elapsed * 1.5) * 0.12);
-      diorama.lampBulbMaterial.emissiveIntensity = THREE.MathUtils.damp(
-        diorama.lampBulbMaterial.emissiveIntensity,
-        targetEmissive,
-        6,
-        dt
-      );
+        if (!reducedMotion) {
+          activeDiorama.beaconOuterRing.rotation.z += dt * 0.45;
+          activeDiorama.beaconInnerRing.rotation.z -= dt * 0.85;
+          const beaconPulse = 1 + Math.sin(elapsed * 2.4) * 0.035;
+          activeDiorama.selectionBeacon.scale.set(beaconPulse, 1, beaconPulse);
+        }
+
+        const liveEnergy =
+          connectionStateRef.current === "live"
+            ? Math.max(userLevelRef.current, partnerLevelRef.current)
+            : 0;
+        const [outerRing, innerRing, coreSphere, midRing] =
+          activeDiorama.resonanceRings;
+        if (!reducedMotion) {
+          const spinSpeed = 0.34 + liveEnergy * 2.4;
+          outerRing.rotation.y += dt * spinSpeed;
+          outerRing.rotation.x = Math.sin(elapsed * 0.65) * 0.22;
+          if (midRing) {
+            midRing.rotation.z += dt * (spinSpeed * 1.15);
+            midRing.rotation.y = Math.cos(elapsed * 0.7) * 0.42;
+          }
+          innerRing.rotation.x += dt * (spinSpeed * 1.55);
+          innerRing.rotation.z = Math.cos(elapsed * 0.85) * 0.28;
+        }
+        const targetScale =
+          1 +
+          liveEnergy * 0.34 +
+          (reducedMotion ? 0 : Math.sin(elapsed * 2.2) * 0.03);
+        const s = THREE.MathUtils.damp(coreSphere.scale.x, targetScale, 12, dt);
+        coreSphere.scale.setScalar(s);
+
+        if (!reducedMotion) {
+          for (let i = 0; i < activeDiorama.steamPuffs.length; i++) {
+            const puff = activeDiorama.steamPuffs[i];
+            const life = (elapsed * puff.speed + puff.phase) % 1;
+            const swirl = elapsed * 1.6 + puff.phase * Math.PI * 2;
+            puff.mesh.position.set(
+              puff.origin[0] + Math.sin(swirl) * puff.driftRadius * life,
+              puff.origin[1] + life * puff.maxHeight,
+              puff.origin[2] + Math.cos(swirl * 0.8) * puff.driftRadius * life
+            );
+            const puffScale = 0.45 + life * 1.35;
+            puff.mesh.scale.set(puffScale, puffScale * 1.15, puffScale);
+            puff.material.opacity = Math.sin(life * Math.PI) * 0.22;
+          }
+
+          const moteBoost = 1 + liveEnergy * 1.8;
+          for (let i = 0; i < activeDiorama.dustMoteSpecs.length; i++) {
+            const spec = activeDiorama.dustMoteSpecs[i];
+            const t = elapsed * spec.speed * moteBoost + spec.phase;
+            _moteDummy.position.set(
+              spec.baseX + Math.sin(t * 0.7) * spec.radius,
+              spec.baseY + Math.cos(t * 0.55) * (spec.radius * 0.65),
+              spec.baseZ + Math.cos(t * 0.65) * spec.radius
+            );
+            const twinkle = spec.scale * (0.75 + Math.sin(t * 1.8) * 0.25);
+            _moteDummy.scale.setScalar(twinkle);
+            _moteDummy.updateMatrix();
+            activeDiorama.dustMotes.setMatrixAt(i, _moteDummy.matrix);
+          }
+          activeDiorama.dustMotes.instanceMatrix.needsUpdate = true;
+        }
+
+        const targetEmissive = isPartnerSpeakingRef.current
+          ? 2.2
+          : 1.45 + (reducedMotion ? 0 : Math.sin(elapsed * 1.5) * 0.12);
+        activeDiorama.lampBulbMaterial.emissiveIntensity = THREE.MathUtils.damp(
+          activeDiorama.lampBulbMaterial.emissiveIntensity,
+          targetEmissive,
+          6,
+          dt
+        );
+      }
 
       controls.update();
       renderer.render(scene, camera);
@@ -635,7 +740,6 @@ export function SpatialSceneView({
 
     return () => {
       disposed = true;
-      sceneAtmosphereRef.current = null;
       cancelAnimationFrame(frameId);
       window.clearTimeout(frameId);
       resizeObserver.disconnect();
@@ -648,7 +752,8 @@ export function SpatialSceneView({
         onContextRestored
       );
       controls.dispose();
-      diorama.dispose();
+      stageRuntimeRef.current?.diorama.dispose();
+      stageRuntimeRef.current = null;
       envTarget.dispose();
       const glCtx = renderer.getContext();
       renderer.dispose();
@@ -659,17 +764,20 @@ export function SpatialSceneView({
         mount.removeChild(renderer.domElement);
       }
     };
+    // Single-mount renderer; room swaps are handled by the dedicated activeRoomId effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusProp, partnerLevelRef, userLevelRef]);
 
   const activeProp =
-    SPATIAL_PROPS.find((p) => p.id === selectedPropId) ?? SPATIAL_PROPS[0];
+    activeRoom.props.find((p) => p.id === selectedPropId) ??
+    activeRoom.props[0];
   const localized = getPropLocalizedTerm(activeProp, language.code);
   const isSaved = savedPhraseStrings.has(localized.term.trim().toLowerCase());
   const isLive = connectionState === "live";
 
   return (
     <div
-      className="relative w-full h-[calc(100vh-4rem)] overflow-hidden bg-[var(--parlo-canvas)]"
+      className="relative w-full h-[calc(100dvh-3.5rem)] sm:h-[calc(100dvh-4rem)] overflow-hidden bg-[var(--parlo-canvas)]"
       style={{
         backgroundImage: atmospherePalette.isDark
           ? "radial-gradient(ellipse 80% 60% at 50% 24%, rgba(255,255,255,0.03), transparent 72%), linear-gradient(180deg, var(--parlo-viewport) 0%, var(--parlo-canvas) 62%, var(--parlo-shell) 100%)"
@@ -701,46 +809,87 @@ export function SpatialSceneView({
       <div
         ref={canvasMountRef}
         className="relative z-[1] w-full h-full"
-        aria-label="Interactive 3D language café diorama"
+        aria-label={`Interactive 3D spatial scene: ${activeRoom.title}`}
       />
 
-      {webglLost && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-[var(--parlo-canvas)]/95 p-6 text-center">
-          <h2 className="font-display text-2xl font-semibold text-[var(--parlo-ink)]">
-            3D Viewport Paused
-          </h2>
-          <p className="mt-2 text-sm text-[var(--parlo-ink-secondary)] max-w-md">
-            WebGL rendering is unavailable or paused on this device. You can still inspect every object below or continue practicing in the Voice Studio.
-          </p>
-          <button
-            type="button"
-            onClick={onOpenStudio}
-            className="mt-4 px-4 py-2 text-sm font-medium text-[var(--parlo-on-solid)] bg-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-hover)] rounded-lg cursor-pointer"
+      <AnimatePresence>
+        {webglLost && (
+          <motion.div
+            key="spatial-webgl-lost"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-[var(--parlo-canvas)]/95 p-6 text-center"
           >
-            Return to Voice Studio
-          </button>
-        </div>
-      )}
+            <h2 className="font-display text-2xl font-semibold text-[var(--parlo-ink)]">
+              3D Viewport Paused
+            </h2>
+            <p className="mt-2 text-sm text-[var(--parlo-ink-secondary)] max-w-md">
+              WebGL rendering is unavailable or paused on this device. You can
+              still inspect every object below or continue practicing in the
+              Voice Studio.
+            </p>
+            <button
+              type="button"
+              onClick={onOpenStudio}
+              className="mt-4 px-4 py-2 text-sm font-medium text-[var(--parlo-on-solid)] bg-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-hover)] rounded-lg cursor-pointer"
+            >
+              Return to Voice Studio
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      {/* Minimal Top-Left Scene Title Strip with Instant Culture Switcher (Solid surface, no backdrop-filter over WebGL) */}
-      <div className="absolute top-4 left-4 z-10 pointer-events-auto bg-[var(--parlo-surface-solid)]/95 border border-[var(--parlo-border)] rounded-lg px-3.5 py-2 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 max-w-[92vw]">
+      {/* Top-Left Scene Bar: Room Switcher + Culture Indicator + Quick Language Switcher */}
+      <div className="absolute top-3.5 left-3.5 right-3.5 sm:right-auto z-10 pointer-events-auto bg-[var(--parlo-surface-solid)]/95 border border-[var(--parlo-border)] rounded-xl px-3.5 py-2 flex flex-wrap items-center gap-x-3 gap-y-2 max-w-[94vw]">
         <div className="flex items-center gap-2 text-xs text-[var(--parlo-ink-muted)]">
-          <span className="font-medium text-[var(--parlo-ink)]">
-            3D Spatial Stage
+          <span className="font-medium text-[var(--parlo-ink)] whitespace-nowrap">
+            {activeRoom.title}
           </span>
-          <span aria-hidden="true">·</span>
-          <span className="text-[var(--parlo-primary)] font-medium">
-            {culture.atelierName}
-          </span>
-          <span aria-hidden="true" className="hidden sm:inline">
+          <span aria-hidden="true" className="hidden md:inline">
             ·
           </span>
-          <span className="hidden sm:inline">Click any tabletop object</span>
+          <span className="hidden md:inline text-[var(--parlo-primary)] font-medium whitespace-nowrap">
+            {activeRoom.cityTag}
+          </span>
+        </div>
+
+        {/* Multi-Scene 3D Room Switcher */}
+        <div
+          className="flex items-center gap-1 sm:pl-2.5 sm:border-l sm:border-[var(--parlo-border)]"
+          role="radiogroup"
+          aria-label="Choose 3D cultural room"
+        >
+          {SPATIAL_ROOMS.map((room) => {
+            const active = room.id === activeRoomId;
+            return (
+              <button
+                key={room.id}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => {
+                  if (room.id !== activeRoomId) {
+                    playClickSfx();
+                    setActiveRoomId(room.id);
+                  }
+                }}
+                className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+                  active
+                    ? "bg-[var(--parlo-primary)] text-[var(--parlo-on-solid)] font-semibold"
+                    : "text-[var(--parlo-ink-secondary)] hover:text-[var(--parlo-ink)] hover:bg-black/5 dark:hover:bg-white/5"
+                }`}
+              >
+                {room.shortLabel}
+              </button>
+            );
+          })}
         </div>
 
         {onSelectLanguage && (
           <div
-            className="flex items-center gap-0.5 pl-2 border-l border-[var(--parlo-border)]"
+            className="hidden lg:flex items-center gap-0.5 pl-2.5 border-l border-[var(--parlo-border)]"
             role="radiogroup"
             aria-label="Switch 3D stage language"
           >
@@ -768,10 +917,8 @@ export function SpatialSceneView({
         )}
       </div>
 
-      {/* Collapsible Unified Bottom Control Dock (lifted cleanly above floating MagnificationDock) */}
-      <div
-        className="absolute bottom-24 left-1/2 -translate-x-1/2 z-10 w-[min(940px,94vw)] pointer-events-auto flex flex-col items-center"
-      >
+      {/* Collapsible Unified Bottom Control Dock */}
+      <div className="absolute bottom-[76px] md:bottom-[72px] left-1/2 -translate-x-1/2 z-10 w-[min(940px,94vw)] pointer-events-auto flex flex-col items-center">
         <button
           type="button"
           onClick={() => setDockOpen((prev) => !prev)}
@@ -790,144 +937,171 @@ export function SpatialSceneView({
           )}
         </button>
 
-        {dockOpen && (
-          <div className="relative overflow-hidden w-full bg-[rgba(15,23,42,0.94)] text-slate-100 border border-slate-700/80 rounded-xl p-4 shadow-lg space-y-3">
-            <div
-              aria-hidden="true"
-              data-culture={language.code}
-              className="parlo-motif-overlay parlo-motif-corner parlo-motif-dark"
-            />
-            {/* Row 1: Prop selector buttons + camera reset + voice toggle */}
-            <div className="relative z-10 flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-800">
-              <div className="flex items-center gap-1.5 overflow-x-auto">
-                {SPATIAL_PROPS.map((prop) => {
-                  const active = prop.id === selectedPropId;
-                  return (
-                    <button
-                      key={prop.id}
-                      type="button"
-                      onClick={() => focusProp(prop)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                        active
-                          ? "bg-[var(--parlo-primary)] text-[var(--parlo-on-solid)]"
-                          : "bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white"
-                      }`}
-                    >
-                      {prop.label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={resetCamera}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-md transition-colors whitespace-nowrap cursor-pointer"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
-                  Reset View
-                </button>
-
-                {isLive ? (
-                  <button
-                    type="button"
-                    onClick={onEndSession}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-md transition-colors whitespace-nowrap cursor-pointer"
-                  >
-                    <PhoneOff className="w-3.5 h-3.5" aria-hidden="true" />
-                    End Voice
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={onStartSession}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--parlo-on-solid)] bg-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-hover)] rounded-md transition-colors whitespace-nowrap cursor-pointer"
-                  >
-                    <Mic className="w-3.5 h-3.5" aria-hidden="true" />
-                    Start Voice
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Row 2: Active Prop Vocabulary & Speaking Prompt */}
-            <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
-                  <span className="font-display text-lg font-semibold text-white">
-                    {localized.term}
-                  </span>
-                  {localized.reading && (
-                    <span className="font-mono text-xs text-slate-400">
-                      {localized.reading}
-                    </span>
-                  )}
-                  <span className="text-xs text-slate-300">
-                    — {localized.meaning}
-                  </span>
+        <AnimatePresence initial={false}>
+          {dockOpen && (
+            <motion.div
+              key="spatial-hud-dock"
+              initial={{ opacity: 0, y: 18, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 18, scale: 0.96 }}
+              transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+              className="relative overflow-hidden w-full bg-[#0d111a]/94 text-[#f1f5f9] border border-[#ffffff]/14 rounded-xl p-4 shadow-[0_20px_50px_-14px_rgba(0,0,0,0.75)] space-y-3"
+            >
+              <div
+                aria-hidden="true"
+                data-culture={language.code}
+                className="parlo-motif-overlay parlo-motif-corner parlo-motif-dark"
+              />
+              {/* Row 1: Prop selector buttons + camera reset + voice toggle */}
+              <div className="relative z-10 flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[#ffffff]/10">
+                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar max-w-full">
+                  {activeRoom.props.map((prop) => {
+                    const active = prop.id === activeProp.id;
+                    return (
+                      <button
+                        key={`${activeRoomId}-${prop.id}`}
+                        type="button"
+                        onClick={() => {
+                          playClickSfx();
+                          focusProp(prop);
+                        }}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                          active
+                            ? "bg-[var(--parlo-primary)] border-[var(--parlo-primary)] text-[var(--parlo-on-solid)] font-semibold"
+                            : "bg-[#1a2233] border-[#ffffff]/10 text-[#cbd5e1] hover:bg-[#242f46] hover:text-[#ffffff]"
+                        }`}
+                      >
+                        {prop.label}
+                      </button>
+                    );
+                  })}
                 </div>
-                <p className="mt-1 text-xs text-slate-300 truncate">
-                  Prompt: “{localized.samplePrompt}”
-                </p>
-              </div>
 
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() =>
-                    speakWithBrowserTts(
-                      localized.samplePrompt,
-                      language.speechLocale
-                    )
-                  }
-                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
-                >
-                  <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
-                  Listen
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={resetCamera}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-[#cbd5e1] bg-[#1a2233] border border-[#ffffff]/10 hover:bg-[#242f46] hover:text-[#ffffff] rounded-md transition-colors whitespace-nowrap cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                    Reset View
+                  </button>
 
-                <button
-                  type="button"
-                  disabled={isSaved}
-                  onClick={() =>
-                    onSavePhrase({
-                      phrase: localized.term,
-                      translation: localized.meaning,
-                      reading: localized.reading,
-                      languageCode: language.code,
-                      scenarioTitle,
-                      note: localized.samplePrompt,
-                    })
-                  }
-                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 disabled:text-emerald-400 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
-                >
-                  {isSaved ? (
-                    <BookmarkCheck className="w-3.5 h-3.5" aria-hidden="true" />
+                  {isLive ? (
+                    <button
+                      type="button"
+                      onClick={onEndSession}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#ffffff] bg-[#dc2626] hover:bg-[#b91c1c] rounded-md transition-colors whitespace-nowrap cursor-pointer"
+                    >
+                      <PhoneOff className="w-3.5 h-3.5" aria-hidden="true" />
+                      End Voice
+                    </button>
                   ) : (
-                    <BookmarkPlus className="w-3.5 h-3.5" aria-hidden="true" />
+                    <button
+                      type="button"
+                      onClick={onStartSession}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--parlo-on-solid)] bg-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-hover)] rounded-md transition-colors whitespace-nowrap cursor-pointer"
+                    >
+                      <Mic className="w-3.5 h-3.5" aria-hidden="true" />
+                      Start Voice
+                    </button>
                   )}
-                  {isSaved ? "Saved" : "Save"}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (isLive) {
-                      onSendTextTurn(localized.samplePrompt);
-                    } else {
-                      onStartSession();
-                    }
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-[var(--parlo-on-solid)] bg-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-hover)] rounded-lg transition-colors whitespace-nowrap cursor-pointer"
-                >
-                  <Send className="w-3.5 h-3.5" aria-hidden="true" />
-                  {isLive ? "Use in Live Chat" : "Practice This"}
-                </button>
+                </div>
               </div>
-            </div>
-          </div>
-        )}
+
+              {/* Row 2: Active Prop Vocabulary & Speaking Prompt */}
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.div
+                  key={`${activeRoomId}-${language.code}-${activeProp.id}`}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                  className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+                      <span className="font-display text-lg font-semibold text-[#f8fafc]">
+                        {localized.term}
+                      </span>
+                      {localized.reading && (
+                        <span className="font-mono text-xs text-[#94a3b8]">
+                          {localized.reading}
+                        </span>
+                      )}
+                      <span className="text-xs text-[#cbd5e1]">
+                        — {localized.meaning}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-[#cbd5e1] line-clamp-2 sm:truncate">
+                      Prompt: “{localized.samplePrompt}”
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        speakWithBrowserTts(
+                          localized.samplePrompt,
+                          language.speechLocale
+                        )
+                      }
+                      className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#e2e8f0] bg-[#1a2233] border border-[#ffffff]/10 hover:bg-[#242f46] hover:text-[#ffffff] rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      Listen
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isSaved}
+                      onClick={() =>
+                        onSavePhrase({
+                          phrase: localized.term,
+                          translation: localized.meaning,
+                          reading: localized.reading,
+                          languageCode: language.code,
+                          scenarioTitle: `${activeRoom.title} · ${scenarioTitle}`,
+                          note: localized.samplePrompt,
+                        })
+                      }
+                      className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#e2e8f0] bg-[#1a2233] border border-[#ffffff]/10 hover:bg-[#242f46] hover:text-[#ffffff] disabled:text-[#34d399] disabled:border-[#34d399]/30 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+                    >
+                      {isSaved ? (
+                        <BookmarkCheck
+                          className="w-3.5 h-3.5"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <BookmarkPlus
+                          className="w-3.5 h-3.5"
+                          aria-hidden="true"
+                        />
+                      )}
+                      {isSaved ? "Saved" : "Save"}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isLive) {
+                          onSendTextTurn(localized.samplePrompt);
+                        } else {
+                          onStartSession();
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-[var(--parlo-on-solid)] bg-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-hover)] rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+                    >
+                      <Send className="w-3.5 h-3.5" aria-hidden="true" />
+                      {isLive ? "Use in Live Chat" : "Practice This"}
+                    </button>
+                  </div>
+                </motion.div>
+              </AnimatePresence>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );

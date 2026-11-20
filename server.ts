@@ -76,9 +76,27 @@ function formatApiError(err: unknown): { status: number; message: string } {
   return { status: 500, message: raw || "Unexpected Gemini API error." };
 }
 
+function safeParseModelJson<T>(rawText: string | undefined, fallbackError: string): T {
+  const cleaned = (rawText ?? "")
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+  if (!cleaned) {
+    throw new Error(fallbackError);
+  }
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    throw new Error(fallbackError);
+  }
+}
+
 interface LiveStartConfig {
   languageName: string;
   languageNative: string;
+  dialectLabel?: string;
+  dialectDirective?: string;
   level: string;
   voiceName: string;
   scenarioTitle: string;
@@ -115,6 +133,9 @@ function buildPartnerSystemInstruction(cfg: LiveStartConfig): string {
   return [
     `You are ${cfg.partnerName}, a ${cfg.partnerRole}.`,
     `Language: Speak strictly in ${cfg.languageName} (${cfg.languageNative}) unless the learner explicitly asks for brief help in English.`,
+    cfg.dialectDirective
+      ? `Regional Variety (${cfg.dialectLabel || "Local"}): ${cfg.dialectDirective}`
+      : "",
     `Learner CEFR Proficiency: ${cfg.level}. Match your vocabulary and sentence complexity to ${cfg.level} so the learner feels stretched yet supported.`,
     `Scenario: ${cfg.scenarioTitle}. ${cfg.scenarioPrompt}`,
     paceDirective,
@@ -162,7 +183,7 @@ async function startServer() {
 
   app.put("/api/me/goal", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const { weeklySessionGoal } = req.body as { weeklySessionGoal?: number };
+      const { weeklySessionGoal } = (req.body ?? {}) as { weeklySessionGoal?: number };
       if (
         typeof weeklySessionGoal !== "number" ||
         !Number.isFinite(weeklySessionGoal)
@@ -323,13 +344,15 @@ async function startServer() {
       const {
         utterance,
         languageName,
+        dialectLabel,
         level,
         scenarioTitle,
         recentTurns = [],
         goals = [],
-      } = req.body as {
+      } = (req.body ?? {}) as {
         utterance: string;
         languageName: string;
+        dialectLabel?: string;
         level: string;
         scenarioTitle: string;
         recentTurns?: { role: string; text: string }[];
@@ -355,7 +378,7 @@ async function startServer() {
 
       const response = await ai.models.generateContent({
         model: "gemini-4-hydrogen",
-        contents: `Target language: ${languageName} (CEFR ${level})
+        contents: `Target language: ${languageName}${dialectLabel ? ` (${dialectLabel} regional style)` : ""} (CEFR ${level})
 Scenario: ${scenarioTitle}
 Recent conversation:
 ${contextText}
@@ -429,7 +452,10 @@ Evaluate the learner's utterance carefully. If it is already natural and accurat
         },
       });
 
-      const parsed = JSON.parse((response.text ?? "{}").trim());
+      const parsed = safeParseModelJson<Record<string, unknown>>(
+        response.text,
+        "Coach feedback returned an invalid format. Please try again."
+      );
       res.json(parsed);
     } catch (err) {
       const { status, message } = formatApiError(err);
@@ -440,7 +466,7 @@ Evaluate the learner's utterance carefully. If it is already natural and accurat
   // 2. Turn Translation & Breakdown
   app.post("/api/coach/translate", async (req, res) => {
     try {
-      const { text, languageName } = req.body as {
+      const { text, languageName } = (req.body ?? {}) as {
         text: string;
         languageName: string;
       };
@@ -478,7 +504,10 @@ Evaluate the learner's utterance carefully. If it is already natural and accurat
         },
       });
 
-      const parsed = JSON.parse((response.text ?? "{}").trim());
+      const parsed = safeParseModelJson<Record<string, unknown>>(
+        response.text,
+        "Translation returned an invalid format. Please try again."
+      );
       res.json(parsed);
     } catch (err) {
       const { status, message } = formatApiError(err);
@@ -491,12 +520,14 @@ Evaluate the learner's utterance carefully. If it is already natural and accurat
     try {
       const {
         languageName,
+        dialectLabel,
         level,
         scenarioTitle,
         scenarioPrompt,
         recentTurns = [],
-      } = req.body as {
+      } = (req.body ?? {}) as {
         languageName: string;
+        dialectLabel?: string;
         level: string;
         scenarioTitle: string;
         scenarioPrompt: string;
@@ -514,7 +545,7 @@ Evaluate the learner's utterance carefully. If it is already natural and accurat
 
       const response = await ai.models.generateContent({
         model: "gemini-4-hydrogen",
-        contents: `Generate 3 natural, distinct reply options the learner can say next in ${languageName} (CEFR ${level}).
+        contents: `Generate 3 natural, distinct reply options the learner can say next in ${languageName}${dialectLabel ? ` (${dialectLabel} variety)` : ""} (CEFR ${level}).
 Scenario: ${scenarioTitle} — ${scenarioPrompt}
 Conversation so far:
 ${transcriptText}
@@ -558,7 +589,10 @@ Make each option fit a distinct register or direction (e.g., Polite, Casual, Cur
         },
       });
 
-      const parsed = JSON.parse((response.text ?? "{}").trim());
+      const parsed = safeParseModelJson<Record<string, unknown>>(
+        response.text,
+        "Reply suggestions returned an invalid format. Please try again."
+      );
       res.json(parsed);
     } catch (err) {
       const { status, message } = formatApiError(err);
@@ -569,7 +603,7 @@ Make each option fit a distinct register or direction (e.g., Polite, Casual, Cur
   // 4. Post-Session Debrief Report
   app.post("/api/coach/debrief", async (req, res) => {
     try {
-      const { languageName, level, scenarioTitle, transcript = [] } = req.body as {
+      const { languageName, level, scenarioTitle, transcript = [] } = (req.body ?? {}) as {
         languageName: string;
         level: string;
         scenarioTitle: string;
@@ -659,8 +693,178 @@ Provide a clear, encouraging, concrete coaching debrief in English with specific
         },
       });
 
-      const parsed = JSON.parse((response.text ?? "{}").trim());
+      const parsed = safeParseModelJson<Record<string, unknown>>(
+        response.text,
+        "Debrief report returned an invalid format. Please try again."
+      );
       res.json(parsed);
+    } catch (err) {
+      const { status, message } = formatApiError(err);
+      res.status(status).json({ error: message });
+    }
+  });
+
+  // 5. Click-Any-Word Cultural Dictionary Breakdown
+  app.post("/api/coach/word", async (req, res) => {
+    try {
+      const {
+        word,
+        sentenceContext = "",
+        languageName = "Spanish",
+        dialectLabel = "",
+        level = "B1",
+      } = (req.body ?? {}) as {
+        word?: string;
+        sentenceContext?: string;
+        languageName?: string;
+        dialectLabel?: string;
+        level?: string;
+      };
+
+      const trimmedWord = typeof word === "string" ? word.trim() : "";
+      if (!trimmedWord) {
+        return res.status(400).json({ error: "A word is required for lookup." });
+      }
+
+      const ai = getGeminiClient();
+      const response = await ai.models.generateContent({
+        model: "gemini-4-hydrogen",
+        contents: `Analyze the target word "${trimmedWord}" in ${languageName}${dialectLabel ? ` (${dialectLabel} regional usage)` : ""} for a CEFR ${level} learner.
+Sentence context: "${sentenceContext || trimmedWord}"
+
+Return its dictionary base/root form, part of speech, pronunciation/romanization reading (if non-Latin script or tricky stress, otherwise empty string), crisp contextual English meaning, a 1-sentence cultural/register nuance note, and one short natural example sentence in ${languageName}.`,
+        config: {
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              word: { type: Type.STRING },
+              baseForm: { type: Type.STRING },
+              partOfSpeech: { type: Type.STRING },
+              reading: { type: Type.STRING },
+              meaning: { type: Type.STRING },
+              dialectNote: { type: Type.STRING },
+              example: { type: Type.STRING },
+            },
+            required: [
+              "word",
+              "baseForm",
+              "partOfSpeech",
+              "meaning",
+              "dialectNote",
+              "example",
+            ],
+          },
+        },
+      });
+
+      const parsed = safeParseModelJson<Record<string, unknown>>(
+        response.text,
+        "Word breakdown returned an invalid format. Please try again."
+      );
+      res.json(parsed);
+    } catch (err) {
+      const { status, message } = formatApiError(err);
+      res.status(status).json({ error: message });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Multi-turn Gemini Language Tutor Chatbot (with role-based system instructions)
+  // -------------------------------------------------------------------------
+  app.post("/api/chat", async (req, res) => {
+    try {
+      const {
+        history = [],
+        message,
+        roleId = "conversation",
+        speedMode = "balanced",
+        languageName = "Spanish",
+        languageNative = "Español",
+        dialectLabel = "",
+        dialectDirective = "",
+        level = "B1",
+        cultureAtelier = "Madrid Atelier",
+        scenarioTitle = "Everyday Conversation",
+      } = (req.body ?? {}) as {
+        history?: { role: "user" | "model"; text: string }[];
+        message?: string;
+        roleId?: "conversation" | "grammar" | "culture" | "phrases";
+        speedMode?: "balanced" | "fast";
+        languageName?: string;
+        languageNative?: string;
+        dialectLabel?: string;
+        dialectDirective?: string;
+        level?: string;
+        cultureAtelier?: string;
+        scenarioTitle?: string;
+      };
+
+      const trimmedMessage = typeof message === "string" ? message.trim() : "";
+      if (!trimmedMessage) {
+        return res.status(400).json({ error: "A message is required." });
+      }
+
+      const dialectSuffix = dialectDirective
+        ? `\nRegional style (${dialectLabel || "Local"}): ${dialectDirective}`
+        : "";
+
+      const roleInstructions: Record<string, string> = {
+        conversation: `You are Parlo's warm, articulate native-speaking conversation partner for ${languageName} (${languageNative}), grounded in the "${cultureAtelier}" aesthetic and the scenario "${scenarioTitle}".${dialectSuffix}
+Respond primarily in natural ${languageName} calibrated to CEFR ${level}. Keep turns concise (2-4 sentences) and end with a natural follow-up question to keep the dialogue flowing. If the learner writes in English or seems stuck, gently bridge back into ${languageName} with a brief English gloss in parentheses only where genuinely helpful. For Japanese, Mandarin, or Korean, include a brief pronunciation reading in parentheses for uncommon words.`,
+        grammar: `You are Parlo's precision ${languageName} (${languageNative}) grammar and phrasing coach for a CEFR ${level} learner practicing "${scenarioTitle}".${dialectSuffix}
+Explain nuances clearly in concise English while quoting authentic ${languageName} examples. When the learner shares a sentence, highlight: (1) a more natural native phrasing, (2) why it sounds better (register, idiom, or tense), and (3) one quick parallel example they can reuse right away. Keep answers scannable and encouraging.`,
+        culture: `You are Parlo's cultural etiquette and local life concierge for ${languageName} (${languageNative}) — "${cultureAtelier}".${dialectSuffix}
+Share vivid, practical insights on social etiquette, politeness registers, regional expressions, cafe/table customs, and unspoken cultural cues connected to "${scenarioTitle}" and CEFR ${level} communication. Always include 1-2 authentic ${languageName} expressions with English translations so the learner can sound effortlessly respectful and local.`,
+        phrases: `You are Parlo's phrase architect and pronunciation mentor for ${languageName} (${languageNative}) at CEFR ${level}.${dialectSuffix}
+Give ready-to-speak phrases tailored to "${scenarioTitle}" or whatever the learner asks for. For each phrase, provide: the exact ${languageName} expression, pronunciation/reading guidance (especially for Japanese, Mandarin, Korean, or tricky liaisons), a natural English translation, and whether it fits casual or polite settings. Keep responses crisp and practical.`,
+      };
+
+      const systemInstruction =
+        roleInstructions[roleId] ?? roleInstructions.conversation;
+
+      const sanitizedHistory = Array.isArray(history)
+        ? history
+            .filter(
+              (item) =>
+                item &&
+                (item.role === "user" || item.role === "model") &&
+                typeof item.text === "string" &&
+                item.text.trim().length > 0
+            )
+            .slice(-24)
+            .map((item) => ({
+              role: item.role,
+              parts: [{ text: item.text.trim() }],
+            }))
+        : [];
+
+      const model =
+        speedMode === "fast" ? "gemini-3.1-flash-lite" : "gemini-4-hydrogen";
+
+      const ai = getGeminiClient();
+      const chat = ai.chats.create({
+        model,
+        history: sanitizedHistory,
+        config: {
+          systemInstruction,
+          ...(model === "gemini-4-hydrogen"
+            ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+            : {}),
+        },
+      });
+
+      const response = await chat.sendMessage({ message: trimmedMessage });
+      const reply = (response.text ?? "").trim();
+
+      if (!reply) {
+        return res
+          .status(502)
+          .json({ error: "Gemini returned an empty response. Please retry." });
+      }
+
+      res.json({ reply, model });
     } catch (err) {
       const { status, message } = formatApiError(err);
       res.status(status).json({ error: message });
@@ -732,6 +936,7 @@ Provide a clear, encouraging, concrete coaching debrief in English with specific
       }
 
       if (msg.type === "start" && msg.config) {
+        isClosing = false;
         closeLiveSession();
         try {
           const ai = getGeminiClient();

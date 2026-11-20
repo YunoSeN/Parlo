@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowRight, Filter, Plus, X } from "lucide-react";
 import { getLanguageByCode, LANGUAGES, VOICE_PERSONAS } from "../data/catalog";
 import { CountryFontSpec, getCultureByLanguage } from "../lib/cultures";
+import { DailyCulturalMission } from "../lib/dailyMission";
 import { CefrLevel, Scenario, VoiceName } from "../types";
 import { CulturalMotifArt } from "./CulturalMotifArt";
+import { DailyMissionStrip } from "./DailyMissionStrip";
 import { EditorialTextReveal } from "./EditorialTextReveal";
 import { LanguageFlagBadge } from "./LanguageFlagBadge";
 import { ScenarioImage } from "./ScenarioImage";
@@ -15,6 +17,9 @@ interface ScenariosViewProps {
   activeScenarioId: string;
   activeLanguageCode?: string;
   categoryFont?: CountryFontSpec;
+  dailyMission?: DailyCulturalMission;
+  dailyMissionCompleted?: boolean;
+  onStartDailyMission?: () => void;
   onSelectLanguage?: (code: string) => void;
   onSelectScenario: (scenario: Scenario) => void;
   onCreateScenario: (scenario: Scenario) => void;
@@ -27,6 +32,9 @@ export function ScenariosView({
   activeScenarioId,
   activeLanguageCode = "es",
   categoryFont,
+  dailyMission,
+  dailyMissionCompleted = false,
+  onStartDailyMission,
   onSelectScenario,
   onCreateScenario,
 }: ScenariosViewProps) {
@@ -49,6 +57,12 @@ export function ScenariosView({
   const [goalsText, setGoalsText] = useState(
     "Introduce your purpose clearly\nAsk two follow-up questions\nWrap up with a natural closing"
   );
+
+  useEffect(() => {
+    if (!showBuilder) {
+      setLanguageCode(activeLanguageCode);
+    }
+  }, [activeLanguageCode, showBuilder]);
 
   const filtered = scenarios
     .filter((s) => {
@@ -364,6 +378,17 @@ export function ScenariosView({
           </motion.form>
         )}
       </AnimatePresence>
+
+      {dailyMission && onStartDailyMission && (
+        <div className="mt-6">
+          <DailyMissionStrip
+            mission={dailyMission}
+            language={activeLanguage}
+            completed={dailyMissionCompleted}
+            onStartMission={onStartDailyMission}
+          />
+        </div>
+      )}
 
       {/* Tactile Category Filter Rail + Active Language Focus Toggle */}
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3 pb-2">

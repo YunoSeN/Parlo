@@ -12,17 +12,25 @@ import { AtmosphericBackdrop } from "./components/AtmosphericBackdrop";
 import { CommandPalette } from "./components/CommandPalette";
 import { LanguageCultureMenu } from "./components/LanguageCultureMenu";
 import { MagnificationDock } from "./components/MagnificationDock";
+import { OnboardingFlow } from "./components/OnboardingFlow";
 import { ParloLogo } from "./components/ParloLogo";
+import { ParloTutorChat } from "./components/ParloTutorChat";
 import { PhrasebookView } from "./components/PhrasebookView";
 import { PricingSection } from "./components/PricingSection";
 import { ReviewView } from "./components/ReviewView";
 import { ScenariosView } from "./components/ScenariosView";
+import { SoundscapePanel } from "./components/SoundscapePanel";
 import { SpatialSceneView } from "./components/SpatialSceneView";
 import { StudioView } from "./components/StudioView";
 import { getLanguageByCode, SCENARIOS } from "./data/catalog";
 import { useAuth } from "./hooks/useAuth";
 import { useLivePartner } from "./hooks/useLivePartner";
+import { ambientEngine, SoundscapeLayerId } from "./lib/ambientAudio";
 import { speakWithBrowserTts } from "./lib/audio";
+import { getDailyCulturalMission } from "./lib/dailyMission";
+import { getDialectById, getDialectsForLanguage } from "./lib/dialects";
+import { syncDocumentSeo } from "./lib/seo";
+import { sfxEngine } from "./lib/sfx";
 import { computeDailyStreak } from "./lib/streaks";
 import {
   CountryFontSpec,
@@ -67,6 +75,11 @@ const SESSIONS_STORAGE_KEY = "parlo_practice_sessions_v1";
 const CUSTOM_SCENARIOS_KEY = "parlo_custom_scenarios_v1";
 const WEEKLY_GOAL_STORAGE_KEY = "parlo_weekly_goal_v1";
 const THEME_STORAGE_KEY = "parlo_theme_v3";
+const SFX_STORAGE_KEY = "parlo_sfx_enabled_v1";
+const AMBIENT_VOL_STORAGE_KEY = "parlo_ambient_volume_v1";
+const ONBOARDING_DONE_KEY = "parlo_onboarding_completed_v1";
+const DIALECT_STORAGE_KEY = "parlo_dialect_by_lang_v1";
+const DAILY_MISSION_STORAGE_KEY = "parlo_daily_missions_v1";
 
 function readStorage<T>(key: string, fallback: T): T {
   try {
@@ -77,8 +90,18 @@ function readStorage<T>(key: string, fallback: T): T {
   }
 }
 
+const VIEW_ORDER: AppView[] = [
+  "studio",
+  "spatial",
+  "scenarios",
+  "phrasebook",
+  "review",
+  "pricing",
+];
+
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>("studio");
+  const [viewDirection, setViewDirection] = useState<number>(1);
   const [categoryFonts, setCategoryFonts] = useState<
     Record<AppView, CountryFontSpec>
   >(() => createInitialCategoryFonts());
@@ -86,7 +109,15 @@ export default function App() {
     useAuth();
 
   const handleNavigateView = useCallback((view: AppView) => {
-    setActiveView(view);
+    setActiveView((prev) => {
+      if (prev !== view) {
+        const prevIdx = VIEW_ORDER.indexOf(prev);
+        const nextIdx = VIEW_ORDER.indexOf(view);
+        setViewDirection(nextIdx >= prevIdx ? 1 : -1);
+        sfxEngine.playNav();
+      }
+      return view;
+    });
     setCategoryFonts((prev) => ({
       ...prev,
       [view]: pickRandomCountryFont(prev[view]?.code),
@@ -109,12 +140,114 @@ export default function App() {
   });
   const [selectedPlanId, setSelectedPlanId] = useState<string>("starter");
   const [commandOpen, setCommandOpen] = useState<boolean>(false);
+  const [chatOpen, setChatOpen] = useState<boolean>(false);
+  const [chatMessageCount, setChatMessageCount] = useState<number>(0);
+  const [soundPanelOpen, setSoundPanelOpen] = useState<boolean>(false);
+  const [onboardingOpen, setOnboardingOpen] = useState<boolean>(
+    () => !readStorage<boolean>(ONBOARDING_DONE_KEY, false)
+  );
+  const [activeSoundLayers, setActiveSoundLayers] = useState<
+    SoundscapeLayerId[]
+  >([]);
+  const [ambientVolume, setAmbientVolume] = useState<number>(() => {
+    const stored = readStorage<number>(AMBIENT_VOL_STORAGE_KEY, 0.28);
+    return typeof stored === "number" && stored >= 0.04 && stored <= 0.65
+      ? stored
+      : 0.28;
+  });
+  const [sfxEnabled, setSfxEnabled] = useState<boolean>(() => {
+    const stored = readStorage<boolean>(SFX_STORAGE_KEY, true);
+    return typeof stored === "boolean" ? stored : true;
+  });
   const [themeId, setThemeId] = useState<ThemeId>(() => {
     const stored = readStorage<string>(THEME_STORAGE_KEY, DEFAULT_THEME_ID);
     return PARLO_THEMES.some((t) => t.id === stored)
       ? (stored as ThemeId)
       : DEFAULT_THEME_ID;
   });
+
+  // Sync procedural SFX & Soundscape Mixer engines
+  useEffect(() => {
+    sfxEngine.setEnabled(sfxEnabled);
+    try {
+      localStorage.setItem(SFX_STORAGE_KEY, JSON.stringify(sfxEnabled));
+    } catch {
+      // ignore storage errors
+    }
+  }, [sfxEnabled]);
+
+  useEffect(() => {
+    ambientEngine.setVolume(ambientVolume);
+    try {
+      localStorage.setItem(
+        AMBIENT_VOL_STORAGE_KEY,
+        JSON.stringify(ambientVolume)
+      );
+    } catch {
+      // ignore storage errors
+    }
+  }, [ambientVolume]);
+
+  useEffect(() => {
+    ambientEngine.syncLayers(activeSoundLayers);
+  }, [activeSoundLayers]);
+
+  useEffect(() => {
+    return () => {
+      ambientEngine.muteAll();
+    };
+  }, []);
+
+  const handleToggleSoundPanel = useCallback(() => {
+    setSoundPanelOpen((prev) => {
+      const next = !prev;
+      if (next) sfxEngine.playOpenModal();
+      else sfxEngine.playCloseModal();
+      return next;
+    });
+  }, []);
+
+  const handleToggleSoundLayer = useCallback((id: SoundscapeLayerId) => {
+    setActiveSoundLayers((prev) => {
+      const willEnable = !prev.includes(id);
+      sfxEngine.playToggle(willEnable);
+      return willEnable ? [...prev, id] : prev.filter((l) => l !== id);
+    });
+  }, []);
+
+  const handleMuteAllSoundLayers = useCallback(() => {
+    setActiveSoundLayers([]);
+    sfxEngine.playToggle(false);
+  }, []);
+
+  const handleToggleSfx = useCallback(() => {
+    setSfxEnabled((prev) => {
+      const next = !prev;
+      sfxEngine.setEnabled(next);
+      if (next) {
+        sfxEngine.playToggle(true);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleToggleChat = useCallback(() => {
+    setChatOpen((prev) => {
+      const next = !prev;
+      if (next) sfxEngine.playOpenModal();
+      else sfxEngine.playCloseModal();
+      return next;
+    });
+  }, []);
+
+  const handleToggleCommandPalette = useCallback(() => {
+    setCommandOpen((prev) => {
+      const next = !prev;
+      if (next) sfxEngine.playOpenModal();
+      else sfxEngine.playCloseModal();
+      return next;
+    });
+  }, []);
 
   // NOTE: applied in an effect below once languageCode is initialized
   useEffect(() => {
@@ -137,7 +270,17 @@ export default function App() {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setCommandOpen((prev) => !prev);
+        handleToggleCommandPalette();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") {
+        e.preventDefault();
+        handleToggleChat();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "m") {
+        e.preventDefault();
+        handleToggleSoundPanel();
         return;
       }
       if (
@@ -158,7 +301,12 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleNavigateView]);
+  }, [
+    handleNavigateView,
+    handleToggleChat,
+    handleToggleCommandPalette,
+    handleToggleSoundPanel,
+  ]);
 
   const dailyStreak = useMemo(() => computeDailyStreak(sessions), [sessions]);
 
@@ -288,6 +436,12 @@ export default function App() {
     useState<CorrectionStyle>("gentle");
   const [speakingPace, setSpeakingPace] = useState<SpeakingPace>("natural");
   const [autoCoach, setAutoCoach] = useState<boolean>(true);
+  const [dialectByLanguage, setDialectByLanguage] = useState<
+    Record<string, string>
+  >(() => readStorage<Record<string, string>>(DIALECT_STORAGE_KEY, {}));
+  const [completedMissions, setCompletedMissions] = useState<
+    Record<string, boolean>
+  >(() => readStorage<Record<string, boolean>>(DAILY_MISSION_STORAGE_KEY, {}));
 
   // Per-session coaching state
   const [coachNotes, setCoachNotes] = useState<CoachFeedback[]>([]);
@@ -309,6 +463,30 @@ export default function App() {
     [languageCode]
   );
 
+  const activeDialects = useMemo(
+    () => getDialectsForLanguage(languageCode),
+    [languageCode]
+  );
+
+  const activeDialect = useMemo(
+    () => getDialectById(languageCode, dialectByLanguage[languageCode]),
+    [dialectByLanguage, languageCode]
+  );
+
+  const dailyMission = useMemo(
+    () => getDailyCulturalMission(languageCode, level),
+    [languageCode, level]
+  );
+  const dailyMissionCompleted = Boolean(completedMissions[dailyMission.id]);
+
+  const handleSelectDialect = useCallback(
+    (dialectId: string) => {
+      sfxEngine.playToggle(true);
+      setDialectByLanguage((prev) => ({ ...prev, [languageCode]: dialectId }));
+    },
+    [languageCode]
+  );
+
   // Sync unified adaptive palette & dataset-driven CSS motif variables
   useEffect(() => {
     const isDark = themeId === "obsidian-glass";
@@ -318,6 +496,16 @@ export default function App() {
     document.documentElement.classList.toggle("dark", isDark);
     syncCulturalMotifCssVariables(document.documentElement, languageCode);
   }, [activeCulture.themeDataAttr, languageCode, themeId]);
+
+  // Sync dynamic document title, meta description, OpenGraph, Twitter & canonical URL
+  useEffect(() => {
+    syncDocumentSeo({
+      activeView,
+      languageName: language.name,
+      cultureAtelier: activeCulture.atelierName,
+      scenarioTitle: activeScenario.title,
+    });
+  }, [activeCulture.atelierName, activeScenario.title, activeView, language.name]);
 
   // Sync local mirror
   useEffect(() => {
@@ -355,6 +543,28 @@ export default function App() {
     }
   }, [weeklyGoal]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        DIALECT_STORAGE_KEY,
+        JSON.stringify(dialectByLanguage)
+      );
+    } catch {
+      // ignore quota issues
+    }
+  }, [dialectByLanguage]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        DAILY_MISSION_STORAGE_KEY,
+        JSON.stringify(completedMissions)
+      );
+    } catch {
+      // ignore quota issues
+    }
+  }, [completedMissions]);
+
   const savedPhraseStrings = useMemo(
     () => new Set(savedPhrases.map((p) => p.phrase.trim().toLowerCase())),
     [savedPhrases]
@@ -390,6 +600,8 @@ export default function App() {
           scenarioTitle: activeScenario.title,
           recentTurns: recentTurns.map((t) => ({ role: t.role, text: t.text })),
           goals: activeScenario.goals,
+          dialectLabel: activeDialect.label,
+          dialectDirective: activeDialect.speechStyleDirective,
         });
         updateTurn(turn.id, { analyzing: false, feedback });
         setCoachNotes((prev) => [
@@ -412,7 +624,14 @@ export default function App() {
         updateTurn(turn.id, { analyzing: false });
       }
     },
-    [activeScenario.goals, activeScenario.title, language.name, level]
+    [
+      activeDialect.label,
+      activeDialect.speechStyleDirective,
+      activeScenario.goals,
+      activeScenario.title,
+      language.name,
+      level,
+    ]
   );
 
   const live = useLivePartner({
@@ -422,6 +641,8 @@ export default function App() {
     scenario: activeScenario,
     correctionStyle,
     speakingPace,
+    dialectLabel: activeDialect.label,
+    dialectDirective: activeDialect.speechStyleDirective,
     onUserTurnFinalized: (turn, allTurns) => {
       if (autoCoach) {
         void analyzeTurnInternal(turn, allTurns, (turnId, patch) => {
@@ -433,7 +654,13 @@ export default function App() {
     },
   });
 
+  // Gently auto-duck soundscapes whenever the live voice partner speaks
+  useEffect(() => {
+    ambientEngine.setDucked(live.isPartnerSpeaking);
+  }, [live.isPartnerSpeaking]);
+
   const handleStartPractice = useCallback(() => {
+    sfxEngine.playSessionStart();
     if (activeView !== "spatial") {
       setActiveView("studio");
     }
@@ -447,6 +674,7 @@ export default function App() {
   }, [activeView, live]);
 
   const handleEndSession = useCallback(async () => {
+    sfxEngine.playSessionEnd();
     const capturedTurns = live.turns.filter((t) => t.text.trim().length > 0);
     const duration = live.elapsedSeconds;
     await live.stopSession();
@@ -473,6 +701,17 @@ export default function App() {
       setSessions((prev) => [record, ...prev]);
       setLastArchivedSessionId(record.id);
 
+      if (
+        record.userTurnsCount >= dailyMission.targetTurns &&
+        !completedMissions[dailyMission.id]
+      ) {
+        setCompletedMissions((prev) => ({
+          ...prev,
+          [dailyMission.id]: true,
+        }));
+        sfxEngine.playSavePhrase();
+      }
+
       void getToken().then((token) => {
         if (token) {
           void persistPracticeSession(token, record).catch(() => {});
@@ -484,6 +723,9 @@ export default function App() {
     activeScenario.partnerName,
     activeScenario.title,
     completedGoals.length,
+    completedMissions,
+    dailyMission.id,
+    dailyMission.targetTurns,
     getToken,
     language.code,
     level,
@@ -536,6 +778,8 @@ export default function App() {
         scenarioTitle: activeScenario.title,
         scenarioPrompt: activeScenario.promptContext,
         recentTurns: live.turns.map((t) => ({ role: t.role, text: t.text })),
+        dialectLabel: activeDialect.label,
+        dialectDirective: activeDialect.speechStyleDirective,
       });
       setHints(suggestions);
     } catch (err) {
@@ -546,12 +790,45 @@ export default function App() {
       setLoadingHints(false);
     }
   }, [
+    activeDialect.label,
+    activeDialect.speechStyleDirective,
     activeScenario.promptContext,
     activeScenario.title,
     language.name,
     level,
     live.turns,
   ]);
+
+  const [pendingMissionStart, setPendingMissionStart] = useState(false);
+
+  const handleStartDailyMission = useCallback(async () => {
+    if (
+      live.connectionState === "live" ||
+      live.connectionState === "connecting"
+    ) {
+      await live.stopSession();
+    }
+    const targetScenario =
+      allScenarios.find((s) => s.id === dailyMission.scenarioId) ??
+      activeScenario;
+    setActiveScenarioId(targetScenario.id);
+    setVoiceName(targetScenario.defaultVoice);
+    setCoachNotes([]);
+    setHints([]);
+    setHintsError(null);
+    setCompletedGoals([]);
+    setLastArchivedSessionId(null);
+    live.resetTranscript();
+    setActiveView("studio");
+    setPendingMissionStart(true);
+  }, [activeScenario, allScenarios, dailyMission.scenarioId, live]);
+
+  useEffect(() => {
+    if (!pendingMissionStart) return;
+    setPendingMissionStart(false);
+    sfxEngine.playSessionStart();
+    void live.startSession();
+  }, [live, pendingMissionStart]);
 
   const handleSelectScenario = useCallback(
     async (scenario: Scenario) => {
@@ -580,6 +857,7 @@ export default function App() {
   // ambient background effect, and matching curated scenario when idle.
   const handleSelectLanguage = useCallback(
     (code: string) => {
+      sfxEngine.playCultureMorph(code);
       setLanguageCode(code);
       setLanguageSelectionCount((prev) => prev + 1);
       const currentlyLive =
@@ -640,6 +918,7 @@ export default function App() {
           createdAt: Date.now(),
           mastered: false,
         };
+        sfxEngine.playSavePhrase();
         return [created, ...prev];
       });
 
@@ -659,6 +938,8 @@ export default function App() {
         prev.map((p) => {
           if (p.id === id) {
             nextMastered = !p.mastered;
+            if (nextMastered) sfxEngine.playSavePhrase();
+            else sfxEngine.playToggle(false);
             return { ...p, mastered: nextMastered };
           }
           return p;
@@ -675,6 +956,7 @@ export default function App() {
 
   const handleDeletePhrase = useCallback(
     (id: string) => {
+      sfxEngine.playToggle(false);
       setSavedPhrases((prev) => prev.filter((p) => p.id !== id));
       void getToken().then((token) => {
         if (token) {
@@ -700,9 +982,12 @@ export default function App() {
   );
 
   const handleToggleGoal = useCallback((index: number) => {
-    setCompletedGoals((prev) =>
-      prev.includes(index) ? prev.filter((i) => i !== index) : [...prev, index]
-    );
+    setCompletedGoals((prev) => {
+      const removing = prev.includes(index);
+      if (removing) sfxEngine.playToggle(false);
+      else sfxEngine.playSavePhrase();
+      return removing ? prev.filter((i) => i !== index) : [...prev, index];
+    });
   }, []);
 
   const isSessionActive =
@@ -719,17 +1004,65 @@ export default function App() {
     [selectedPlanId]
   );
 
+  const handleCompleteOnboarding = useCallback(
+    (launchVoice: boolean) => {
+      setOnboardingOpen(false);
+      try {
+        localStorage.setItem(ONBOARDING_DONE_KEY, JSON.stringify(true));
+      } catch {
+        // ignore storage errors
+      }
+      if (launchVoice) {
+        handleStartPractice();
+      } else {
+        sfxEngine.playSavePhrase();
+      }
+    },
+    [handleStartPractice]
+  );
+
+  const handleSkipOnboarding = useCallback(() => {
+    setOnboardingOpen(false);
+    sfxEngine.playCloseModal();
+    try {
+      localStorage.setItem(ONBOARDING_DONE_KEY, JSON.stringify(true));
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  const handleOpenOnboarding = useCallback(() => {
+    sfxEngine.playOpenModal();
+    setOnboardingOpen(true);
+  }, []);
+
+  const handleToggleTheme = useCallback(() => {
+    setThemeId((prev) => {
+      const next =
+        prev === "obsidian-glass" ? "soft-ceramic" : "obsidian-glass";
+      sfxEngine.playToggle(next === "soft-ceramic");
+      return next;
+    });
+  }, []);
+
   return (
     <div
       className={`min-h-screen parlo-viewport-stage text-[var(--parlo-ink)] transition-colors duration-300 ${
         activeView === "spatial" ? "" : "sm:p-3 lg:p-4"
       }`}
     >
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[60] focus:px-4 focus:py-2 focus:rounded-xl focus:bg-[var(--parlo-primary)] focus:text-[var(--parlo-on-solid)] focus:text-xs focus:font-semibold focus:shadow-lg"
+      >
+        Skip to main content
+      </a>
+
       <div
         className={`relative flex flex-col transition-colors duration-300 ${
           activeView === "spatial"
             ? "min-h-screen bg-[var(--parlo-canvas)]"
-            : "parlo-floating-shell max-w-[1520px] mx-auto min-h-[calc(100vh-1.5rem)] lg:min-h-[calc(100vh-2rem)] sm:rounded-[2rem] overflow-x-clip"
+            : "parlo-floating-shell max-w-[1520px] mx-auto min-h-[calc(100dvh)] sm:min-h-[calc(100vh-1.5rem)] lg:min-h-[calc(100vh-2rem)] sm:rounded-[2rem] overflow-x-clip"
         }`}
       >
         {activeView !== "spatial" && (
@@ -740,13 +1073,13 @@ export default function App() {
           />
         )}
 
-        {/* Clean Floating Header (Primary navigation now lives exclusively in the Apple-style MagnificationDock) */}
+        {/* Clean Floating Header (Compact 54px on phones to stay well inside 15% sticky budget) */}
         <header
           onPointerMove={handleHeaderPointerMove}
           onPointerLeave={handleHeaderPointerLeave}
-          className="sticky top-0 z-30 bg-[var(--parlo-shell)]/80 backdrop-blur-xl border-b border-[var(--parlo-border)]/70 parlo-nav-island transition-colors duration-200"
+          className="sticky top-0 z-30 bg-[var(--parlo-shell)]/84 backdrop-blur-xl border-b border-[var(--parlo-border)]/70 parlo-nav-island transition-colors duration-200"
         >
-          <div className="max-w-[1360px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4 sm:gap-6">
+          <div className="max-w-[1360px] mx-auto px-3 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-2 sm:gap-6">
             {/* Brand Mark: 'P' at rest, morphs to cultural motif on hover, locked Parlo font */}
             <ParloLogo
               languageCode={languageCode}
@@ -759,7 +1092,7 @@ export default function App() {
             />
 
           {/* Right Controls: Global culture switcher, surface finish toggle, daily streak & primary action */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <LanguageCultureMenu
               activeLanguageCode={languageCode}
               onSelectLanguage={handleSelectLanguage}
@@ -769,11 +1102,7 @@ export default function App() {
               type="button"
               whileHover={{ y: -1.5, scale: 1.04 }}
               whileTap={{ scale: 0.95 }}
-              onClick={() =>
-                setThemeId((prev) =>
-                  prev === "obsidian-glass" ? "soft-ceramic" : "obsidian-glass"
-                )
-              }
+              onClick={handleToggleTheme}
               title={
                 themeId === "obsidian-glass"
                   ? "Switch to Soft Ceramic (Light)"
@@ -784,13 +1113,24 @@ export default function App() {
                   ? "Switch to Soft Ceramic light mode"
                   : "Switch to Obsidian Glass dark mode"
               }
-              className="hidden sm:inline-flex items-center justify-center w-8 h-8 rounded-lg border border-[var(--parlo-border)] bg-[var(--parlo-surface)] text-[var(--parlo-ink-secondary)] hover:text-[var(--parlo-ink)] hover:border-[var(--parlo-primary)] transition-colors shrink-0 cursor-pointer"
+              className="hidden sm:inline-flex items-center justify-center w-8 h-8 rounded-lg border border-[var(--parlo-border)] bg-[var(--parlo-surface)] text-[var(--parlo-ink-secondary)] hover:text-[var(--parlo-ink)] hover:border-[var(--parlo-primary)] transition-colors shrink-0 cursor-pointer overflow-hidden"
             >
-              {themeId === "obsidian-glass" ? (
-                <Sun className="w-3.5 h-3.5" aria-hidden="true" />
-              ) : (
-                <Moon className="w-3.5 h-3.5" aria-hidden="true" />
-              )}
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.span
+                  key={themeId}
+                  initial={{ opacity: 0, rotate: -45, scale: 0.65 }}
+                  animate={{ opacity: 1, rotate: 0, scale: 1 }}
+                  exit={{ opacity: 0, rotate: 45, scale: 0.65 }}
+                  transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                  className="inline-flex items-center justify-center"
+                >
+                  {themeId === "obsidian-glass" ? (
+                    <Sun className="w-3.5 h-3.5" aria-hidden="true" />
+                  ) : (
+                    <Moon className="w-3.5 h-3.5" aria-hidden="true" />
+                  )}
+                </motion.span>
+              </AnimatePresence>
             </motion.button>
 
             <motion.button
@@ -810,9 +1150,9 @@ export default function App() {
               }${dailyStreak.practicedToday ? ", practiced today" : ""}`}
               className={`hidden md:inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-mono font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 tabular-nums cursor-pointer ${
                 dailyStreak.practicedToday
-                  ? "bg-orange-50 border-orange-200 text-orange-800 hover:bg-orange-100/70"
+                  ? "bg-[color-mix(in_srgb,var(--parlo-accent)_14%,var(--parlo-surface))] border-[var(--parlo-accent-border)] text-[var(--parlo-accent)] hover:bg-[color-mix(in_srgb,var(--parlo-accent)_22%,var(--parlo-surface))]"
                   : dailyStreak.currentStreak > 0
-                  ? "bg-[var(--parlo-surface)] border-orange-200 text-[var(--parlo-ink)] hover:bg-orange-50/50"
+                  ? "bg-[var(--parlo-surface)] border-[var(--parlo-accent-border)] text-[var(--parlo-ink)] hover:bg-[color-mix(in_srgb,var(--parlo-accent)_10%,var(--parlo-surface))]"
                   : "bg-[var(--parlo-surface)] border-[var(--parlo-border)] text-[var(--parlo-ink-muted)] hover:border-[var(--parlo-ink-muted)]"
               }`}
             >
@@ -827,47 +1167,83 @@ export default function App() {
               <span>{dailyStreak.currentStreak}d</span>
             </motion.button>
 
-            {isSessionActive ? (
-              <motion.button
-                type="button"
-                whileHover={{ y: -1.5 }}
-                whileTap={{ scale: 0.97 }}
-                onClick={handleEndSession}
-                className="px-4 py-2 text-xs font-semibold text-[var(--parlo-on-solid)] bg-[var(--parlo-ink)] hover:bg-[var(--parlo-primary)] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--parlo-ink)]"
-              >
-                End Session
-              </motion.button>
-            ) : (
-              <motion.button
-                type="button"
-                whileHover={{ y: -1.5 }}
-                whileTap={{ scale: 0.97 }}
-                onClick={handleStartPractice}
-                className="px-4 py-2 text-xs font-semibold text-[var(--parlo-on-solid)] bg-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-hover)] rounded-lg shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--parlo-primary)]"
-              >
-                Start Practice
-              </motion.button>
-            )}
+            <AnimatePresence mode="wait" initial={false}>
+              {isSessionActive ? (
+                <motion.button
+                  key="header-end-session"
+                  type="button"
+                  initial={{ opacity: 0, scale: 0.92, y: 4 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.92, y: -4 }}
+                  whileHover={{ y: -1.5 }}
+                  whileTap={{ scale: 0.97 }}
+                  transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                  onClick={handleEndSession}
+                  className="px-3 sm:px-4 py-1.5 sm:py-2 text-xs font-semibold text-[var(--parlo-on-solid)] bg-[var(--parlo-ink)] hover:bg-[var(--parlo-primary)] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--parlo-ink)]"
+                >
+                  End
+                  <span className="hidden sm:inline"> Session</span>
+                </motion.button>
+              ) : (
+                <motion.button
+                  key="header-start-practice"
+                  type="button"
+                  initial={{ opacity: 0, scale: 0.92, y: 4 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.92, y: -4 }}
+                  whileHover={{ y: -1.5 }}
+                  whileTap={{ scale: 0.97 }}
+                  transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                  onClick={handleStartPractice}
+                  className="px-3 sm:px-4 py-1.5 sm:py-2 text-xs font-semibold text-[var(--parlo-on-solid)] bg-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-hover)] rounded-lg shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--parlo-primary)]"
+                >
+                  <span className="sm:hidden">Practice</span>
+                  <span className="hidden sm:inline">Start Practice</span>
+                </motion.button>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       </header>
 
-      <main className="relative z-10 flex-1" style={{ perspective: "1600px" }}>
-        <AnimatePresence mode="wait">
+      <main
+        id="main-content"
+        className="relative z-10 flex-1"
+        style={{ perspective: "1600px" }}
+      >
+        <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={activeView}
             initial={
               activeView === "spatial"
-                ? { opacity: 0 }
-                : { opacity: 0, y: 12, rotateX: 1.8 }
+                ? { opacity: 0, scale: 0.985 }
+                : {
+                    opacity: 0,
+                    x: viewDirection * 22,
+                    y: 8,
+                    scale: 0.992,
+                    filter: "blur(3px)",
+                  }
             }
-            animate={{ opacity: 1, y: 0, rotateX: 0 }}
+            animate={{
+              opacity: 1,
+              x: 0,
+              y: 0,
+              scale: 1,
+              filter: "blur(0px)",
+            }}
             exit={
               activeView === "spatial"
-                ? { opacity: 0 }
-                : { opacity: 0, y: -8, rotateX: -1.2 }
+                ? { opacity: 0, scale: 0.985 }
+                : {
+                    opacity: 0,
+                    x: viewDirection * -20,
+                    y: -6,
+                    scale: 0.99,
+                    filter: "blur(3px)",
+                  }
             }
-            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
             style={{ transformOrigin: "50% 0%" }}
           >
         {activeView === "studio" && (
@@ -917,6 +1293,15 @@ export default function App() {
             onSavePhrase={handleSavePhrase}
             lastArchivedSessionId={lastArchivedSessionId}
             onOpenReview={() => handleNavigateView("review")}
+            dialects={activeDialects}
+            activeDialectId={activeDialect.id}
+            onSelectDialect={handleSelectDialect}
+            dailyMission={dailyMission}
+            dailyMissionCompleted={dailyMissionCompleted}
+            onStartDailyMission={() => void handleStartDailyMission()}
+            activeSoundLayers={activeSoundLayers}
+            onToggleSoundLayer={handleToggleSoundLayer}
+            onOpenSoundscapePanel={handleToggleSoundPanel}
           />
         )}
 
@@ -944,6 +1329,9 @@ export default function App() {
             activeScenarioId={activeScenario.id}
             activeLanguageCode={languageCode}
             categoryFont={categoryFonts.scenarios}
+            dailyMission={dailyMission}
+            dailyMissionCompleted={dailyMissionCompleted}
+            onStartDailyMission={() => void handleStartDailyMission()}
             onSelectLanguage={handleSelectLanguage}
             onSelectScenario={handleSelectScenario}
             onCreateScenario={handleCreateScenario}
@@ -990,10 +1378,18 @@ export default function App() {
       </main>
 
       {/* Quiet Footer with Theme Palette Selector & Optional Account Sign-In (hidden in full-bleed 3D Stage) */}
-      {activeView !== "spatial" && (
-        <footer className="relative z-10 border-t border-[var(--parlo-border)]/70 bg-[var(--parlo-surface)] backdrop-blur-md mt-8 pb-24">
+      <AnimatePresence>
+        {activeView !== "spatial" && (
+          <motion.footer
+            key="parlo-footer"
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 12 }}
+            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            className="relative z-10 border-t border-[var(--parlo-border)]/70 bg-[var(--parlo-surface)] backdrop-blur-md mt-8 pb-24 md:pb-20"
+          >
           <div className="max-w-[1360px] mx-auto px-4 sm:px-6 py-4 flex flex-col lg:flex-row items-center justify-between gap-4 text-xs text-[var(--parlo-ink-muted)]">
-            <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2.5">
               <ParloLogo
                 languageCode={languageCode}
                 size="sm"
@@ -1010,7 +1406,15 @@ export default function App() {
               <span aria-hidden="true">·</span>
               <button
                 type="button"
-                onClick={() => setCommandOpen(true)}
+                onClick={handleOpenOnboarding}
+                className="text-[var(--parlo-ink-secondary)] hover:text-[var(--parlo-ink)] underline-offset-2 hover:underline cursor-pointer"
+              >
+                Setup Guide
+              </button>
+              <span aria-hidden="true">·</span>
+              <button
+                type="button"
+                onClick={handleToggleCommandPalette}
                 className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-mono text-[var(--parlo-ink-secondary)] bg-[var(--parlo-canvas)] border border-[var(--parlo-border)] hover:border-[var(--parlo-ink-muted)] hover:text-[var(--parlo-ink)] rounded-md transition-colors cursor-pointer"
                 title="Open Quick Studio Launcher (Cmd/Ctrl + K)"
               >
@@ -1048,7 +1452,12 @@ export default function App() {
                     type="button"
                     whileHover={{ y: -1.5 }}
                     whileTap={{ scale: 0.97 }}
-                    onClick={() => setThemeId(palette.id)}
+                    onClick={() => {
+                      if (themeId !== palette.id) {
+                        sfxEngine.playToggle(palette.mode === "light");
+                        setThemeId(palette.id);
+                      }
+                    }}
                     aria-pressed={active}
                     title={`${palette.name} (${activeCulture.atelierName}) — ${palette.tagline}`}
                     className={`relative inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs transition-colors whitespace-nowrap cursor-pointer ${
@@ -1128,8 +1537,9 @@ export default function App() {
               )}
             </div>
           </div>
-        </footer>
-      )}
+        </motion.footer>
+        )}
+      </AnimatePresence>
 
       <MagnificationDock
         activeView={activeView}
@@ -1138,6 +1548,15 @@ export default function App() {
         activeLanguageCode={languageCode}
         isSessionActive={isSessionActive}
         savedPhrasesCount={savedPhrases.length}
+        chatOpen={chatOpen}
+        chatMessageCount={chatMessageCount}
+        soundPanelOpen={soundPanelOpen}
+        activeSoundLayersCount={activeSoundLayers.length}
+        isDarkTheme={themeId === "obsidian-glass"}
+        onToggleTheme={handleToggleTheme}
+        onOpenOnboarding={handleOpenOnboarding}
+        onToggleChat={handleToggleChat}
+        onToggleSoundPanel={handleToggleSoundPanel}
         onToggleVoiceSession={() => {
           if (isSessionActive) {
             void handleEndSession();
@@ -1145,29 +1564,103 @@ export default function App() {
             handleStartPractice();
           }
         }}
-        onOpenCommandPalette={() => setCommandOpen(true)}
-        onSpeakCultureProverb={() =>
+        onOpenCommandPalette={handleToggleCommandPalette}
+        onSpeakCultureProverb={() => {
+          sfxEngine.playNav();
           speakWithBrowserTts(
             activeCulture.culturalProverb,
             language.speechLocale
-          )
-        }
+          );
+        }}
+      />
+
+      <OnboardingFlow
+        open={onboardingOpen}
+        languageCode={languageCode}
+        level={level}
+        voiceName={voiceName}
+        speakingPace={speakingPace}
+        weeklyGoal={weeklyGoal}
+        activeScenarioId={activeScenario.id}
+        scenarios={allScenarios}
+        activeSoundLayers={activeSoundLayers}
+        sfxEnabled={sfxEnabled}
+        onSelectLanguage={handleSelectLanguage}
+        onSelectLevel={setLevel}
+        onSelectVoice={setVoiceName}
+        onChangeSpeakingPace={setSpeakingPace}
+        onChangeWeeklyGoal={handleChangeWeeklyGoal}
+        onSelectScenario={(sc) => {
+          setActiveScenarioId(sc.id);
+          setVoiceName(sc.defaultVoice);
+          setCoachNotes([]);
+          setHints([]);
+          setHintsError(null);
+          setCompletedGoals([]);
+        }}
+        onToggleSoundLayer={handleToggleSoundLayer}
+        onToggleSfx={handleToggleSfx}
+        onComplete={handleCompleteOnboarding}
+        onSkip={handleSkipOnboarding}
+      />
+
+      <SoundscapePanel
+        open={soundPanelOpen}
+        onClose={() => {
+          setSoundPanelOpen(false);
+          sfxEngine.playCloseModal();
+        }}
+        activeLayers={activeSoundLayers}
+        ambientVolume={ambientVolume}
+        sfxEnabled={sfxEnabled}
+        activeLanguageCode={languageCode}
+        onToggleLayer={handleToggleSoundLayer}
+        onMuteAllLayers={handleMuteAllSoundLayers}
+        onChangeAmbientVolume={setAmbientVolume}
+        onToggleSfx={handleToggleSfx}
+      />
+
+      <ParloTutorChat
+        open={chatOpen}
+        onClose={() => {
+          setChatOpen(false);
+          sfxEngine.playCloseModal();
+        }}
+        language={language}
+        level={level}
+        scenario={activeScenario}
+        dialectLabel={activeDialect.label}
+        dialectDirective={activeDialect.speechStyleDirective}
+        savedPhraseStrings={savedPhraseStrings}
+        onSavePhrase={handleSavePhrase}
+        onMessageCountChange={setChatMessageCount}
       />
 
       <CommandPalette
         open={commandOpen}
-        onClose={() => setCommandOpen(false)}
+        onClose={() => {
+          setCommandOpen(false);
+          sfxEngine.playCloseModal();
+        }}
         activeView={activeView}
         activeLanguageCode={languageCode}
         activeLevel={level}
         activeThemeId={themeId}
         isSessionActive={isSessionActive}
+        chatOpen={chatOpen}
+        soundPanelOpen={soundPanelOpen}
         scenarios={allScenarios}
         onNavigate={handleNavigateView}
         onSelectLanguage={handleSelectLanguage}
         onSelectLevel={setLevel}
         onSelectScenario={(sc) => void handleSelectScenario(sc)}
-        onSelectTheme={setThemeId}
+        onSelectTheme={(id) => {
+          sfxEngine.playToggle(id === "soft-ceramic");
+          setThemeId(id);
+        }}
+        onToggleChat={handleToggleChat}
+        onToggleSoundPanel={handleToggleSoundPanel}
+        onOpenOnboarding={handleOpenOnboarding}
         onToggleSession={() => {
           if (isSessionActive) {
             void handleEndSession();

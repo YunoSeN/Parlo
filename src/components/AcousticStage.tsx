@@ -65,6 +65,60 @@ export function AcousticStage({
       }
     };
 
+    const cachedTheme = {
+      isDark: true,
+      primaryHex: culture.darkPrimaryHex,
+      accentHex: culture.darkAccentHex,
+      glowHex: culture.darkGlowHex,
+      borderHex: "rgba(255,255,255,0.12)",
+    };
+
+    const syncThemeColors = () => {
+      const rootEl = document.documentElement;
+      const isDark = rootEl.dataset.mode !== "light";
+      const styles = getComputedStyle(rootEl);
+      cachedTheme.isDark = isDark;
+      cachedTheme.primaryHex =
+        styles.getPropertyValue("--parlo-primary").trim() ||
+        (isDark ? culture.darkPrimaryHex : culture.primaryHex);
+      cachedTheme.accentHex =
+        styles.getPropertyValue("--parlo-accent").trim() ||
+        (isDark ? culture.darkAccentHex : culture.accentHex);
+      cachedTheme.glowHex =
+        styles.getPropertyValue("--parlo-glow").trim() ||
+        (isDark ? culture.darkGlowHex : culture.glowHex);
+      cachedTheme.borderHex =
+        styles.getPropertyValue("--parlo-border").trim() ||
+        (isDark ? "rgba(255,255,255,0.12)" : "rgba(163,177,198,0.45)");
+    };
+
+    syncThemeColors();
+    const themeObserver = new MutationObserver(syncThemeColors);
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-culture", "data-mode", "class"],
+    });
+
+    const traceRoundedRect = (
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      radius: number
+    ) => {
+      if (typeof ctx.roundRect === "function") {
+        ctx.roundRect(x, y, width, height, radius);
+      } else {
+        const r = Math.min(radius, width / 2, height / 2);
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + width, y, x + width, y + height, r);
+        ctx.arcTo(x + width, y + height, x, y + height, r);
+        ctx.arcTo(x, y + height, x, y, r);
+        ctx.arcTo(x, y, x + width, y, r);
+        ctx.closePath();
+      }
+    };
+
     const drawRibbon = (
       w: number,
       h: number,
@@ -412,7 +466,7 @@ export function AcousticStage({
       const half = 15.5 * scale;
       const rad = 5.5 * scale;
       ctx.beginPath();
-      ctx.roundRect(-half, -half, half * 2, half * 2, rad);
+      traceRoundedRect(-half, -half, half * 2, half * 2, rad);
       ctx.fillStyle = isDark ? "rgba(12, 13, 18, 0.88)" : "rgba(228, 233, 240, 0.92)";
       ctx.fill();
       ctx.lineWidth = 1.25 * dpr;
@@ -501,21 +555,7 @@ export function AcousticStage({
         orbitAngle += connectionState === "live" ? 0.026 + energy * 0.05 : 0.012;
       }
 
-      const rootEl = document.documentElement;
-      const isDark = rootEl.dataset.mode !== "light";
-      const styles = getComputedStyle(rootEl);
-      const primaryHex =
-        styles.getPropertyValue("--parlo-primary").trim() ||
-        (isDark ? culture.darkPrimaryHex : culture.primaryHex);
-      const accentHex =
-        styles.getPropertyValue("--parlo-accent").trim() ||
-        (isDark ? culture.darkAccentHex : culture.accentHex);
-      const glowHex =
-        styles.getPropertyValue("--parlo-glow").trim() ||
-        (isDark ? culture.darkGlowHex : culture.glowHex);
-      const borderHex =
-        styles.getPropertyValue("--parlo-border").trim() ||
-        (isDark ? "rgba(255,255,255,0.12)" : "rgba(163,177,198,0.45)");
+      const { isDark, primaryHex, accentHex, glowHex, borderHex } = cachedTheme;
 
       const cx = w / 2 + smoothTiltX * 12 * dpr;
       const cy = h / 2 + smoothTiltY * 5 * dpr;
@@ -719,7 +759,10 @@ export function AcousticStage({
     };
 
     rafId = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(rafId);
+    return () => {
+      cancelAnimationFrame(rafId);
+      themeObserver.disconnect();
+    };
   }, [
     connectionState,
     culture,

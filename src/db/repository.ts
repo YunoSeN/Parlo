@@ -14,6 +14,15 @@ import {
   VoiceName,
 } from "../types.ts";
 
+function safeJsonParse<T>(raw: string | null | undefined, fallback: T): T {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 export async function listUserSessions(
   userId: number
 ): Promise<PracticeSessionRecord[]> {
@@ -36,13 +45,16 @@ export async function listUserSessions(
       partnerTurnsCount: row.partnerTurnsCount,
       goalsCompleted: row.goalsCompleted,
       goalsTotal: row.goalsTotal,
-      transcript: JSON.parse(row.transcriptJson) as {
-        role: "user" | "partner";
-        text: string;
-      }[],
-      debrief: row.debriefJson
-        ? (JSON.parse(row.debriefJson) as DebriefReport)
-        : undefined,
+      transcript: safeJsonParse<
+        {
+          role: "user" | "partner";
+          text: string;
+        }[]
+      >(row.transcriptJson, []),
+      debrief: safeJsonParse<DebriefReport | undefined>(
+        row.debriefJson,
+        undefined
+      ),
     }));
   } catch (error) {
     console.error("Failed to list practice sessions:", error);
@@ -80,6 +92,7 @@ export async function upsertPracticeSession(
           goalsCompleted: record.goalsCompleted,
           debriefJson: record.debrief ? JSON.stringify(record.debrief) : null,
         },
+        setWhere: eq(practiceSessions.userId, userId),
       });
   } catch (error) {
     console.error("Failed to save practice session:", error);
@@ -159,6 +172,7 @@ export async function upsertSavedPhrase(
           translation: phrase.translation,
           note: phrase.note ?? null,
         },
+        setWhere: eq(savedPhrases.userId, userId),
       });
   } catch (error) {
     console.error("Failed to save phrase:", error);
@@ -230,7 +244,7 @@ export async function listUserCustomScenarios(
       fallbackGradient: "from-slate-800 via-blue-950 to-slate-900",
       summary: row.summary,
       promptContext: row.promptContext,
-      goals: JSON.parse(row.goalsJson) as string[],
+      goals: safeJsonParse<string[]>(row.goalsJson, []),
       starterPhrases: {},
       isCustom: true,
     }));

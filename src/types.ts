@@ -133,3 +133,26 @@ export interface PracticeSessionRecord {
   transcript: { role: 'user' | 'partner'; text: string }[];
   debrief?: DebriefReport;
 }
+
+export type SpatialRoomId = 'madrid-cafe' | 'tokyo-counter' | 'paris-bookshop';
+
+export interface WordLookupResult {
+  word: string;
+  baseForm: string;
+  partOfSpeech: string;
+  reading?: string;
+  meaning: string;
+  dialectNote: string;
+  example: string;
+}
+
+export type SrsRating = 'again' | 'good' | 'easy';
+
+export interface SrsCardState {
+  repetitions: number;
+  intervalDays: number;
+  easeFactor: number;
+  nextReviewAt: number;
+  lastReviewedAt: number;
+}
+

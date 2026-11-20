@@ -3,6 +3,7 @@ import {
   DebriefReport,
   ReplySuggestion,
   TurnTranslation,
+  WordLookupResult,
 } from "../types";
 
 async function postJson<T>(url: string, body: unknown): Promise<T> {
@@ -22,6 +23,7 @@ export async function fetchTurnFeedback(params: {
   turnId: string;
   utterance: string;
   languageName: string;
+  dialectLabel?: string;
   level: string;
   scenarioTitle: string;
   recentTurns: { role: string; text: string }[];
@@ -60,6 +62,7 @@ export async function fetchTurnTranslation(params: {
 
 export async function fetchReplyHints(params: {
   languageName: string;
+  dialectLabel?: string;
   level: string;
   scenarioTitle: string;
   scenarioPrompt: string;
@@ -72,6 +75,24 @@ export async function fetchReplyHints(params: {
   return res.suggestions ?? [];
 }
 
+const wordLookupCache = new Map<string, WordLookupResult>();
+
+export async function fetchWordLookup(params: {
+  word: string;
+  sentenceContext: string;
+  languageName: string;
+  dialectLabel?: string;
+  level: string;
+}): Promise<WordLookupResult> {
+  const cacheKey = `${params.languageName}|${params.dialectLabel || ""}|${params.word.trim().toLowerCase()}|${params.sentenceContext.slice(0, 60)}`;
+  const cached = wordLookupCache.get(cacheKey);
+  if (cached) return cached;
+
+  const result = await postJson<WordLookupResult>("/api/coach/word", params);
+  wordLookupCache.set(cacheKey, result);
+  return result;
+}
+
 export async function fetchSessionDebrief(params: {
   languageName: string;
   level: string;
@@ -80,3 +101,34 @@ export async function fetchSessionDebrief(params: {
 }): Promise<DebriefReport> {
   return postJson<DebriefReport>("/api/coach/debrief", params);
 }
+
+export type TutorChatRoleId =
+  | "conversation"
+  | "grammar"
+  | "culture"
+  | "phrases";
+
+export type TutorChatSpeedMode = "balanced" | "fast";
+
+export interface TutorChatHistoryItem {
+  role: "user" | "model";
+  text: string;
+}
+
+export async function sendTutorChatMessage(params: {
+  history: TutorChatHistoryItem[];
+  message: string;
+  roleId: TutorChatRoleId;
+  speedMode: TutorChatSpeedMode;
+  languageName: string;
+  languageNative: string;
+  dialectLabel?: string;
+  dialectDirective?: string;
+  level: string;
+  cultureAtelier: string;
+  scenarioTitle: string;
+}): Promise<{ reply: string; model: string }> {
+  return postJson<{ reply: string; model: string }>("/api/chat", params);
+}
+
+

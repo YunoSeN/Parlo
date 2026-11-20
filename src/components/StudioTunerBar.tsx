@@ -1,5 +1,6 @@
 import { motion } from "motion/react";
 import { CEFR_DESCRIPTIONS, VOICE_PERSONAS } from "../data/catalog";
+import { RegionalDialectOption } from "../lib/dialects";
 import { CefrLevel, SpeakingPace, VoiceName } from "../types";
 
 interface StudioTunerBarProps {
@@ -9,6 +10,9 @@ interface StudioTunerBarProps {
   onSelectVoice: (voice: VoiceName) => void;
   speakingPace: SpeakingPace;
   onChangeSpeakingPace: (pace: SpeakingPace) => void;
+  dialects?: RegionalDialectOption[];
+  activeDialectId?: string;
+  onSelectDialect?: (dialectId: string) => void;
   disabled: boolean;
 }
 
@@ -32,13 +36,16 @@ export function StudioTunerBar({
   onSelectVoice,
   speakingPace,
   onChangeSpeakingPace,
+  dialects = [],
+  activeDialectId,
+  onSelectDialect,
   disabled,
 }: StudioTunerBarProps) {
   const activePersona =
     VOICE_PERSONAS.find((v) => v.id === voiceName) ?? VOICE_PERSONAS[0];
 
   return (
-    <div className="bg-[var(--parlo-surface)] border border-[var(--parlo-border)] rounded-2xl parlo-surface-elevated p-3.5 sm:p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+    <div className="bg-[var(--parlo-surface)] border border-[var(--parlo-border)] rounded-2xl parlo-surface-elevated p-3.5 sm:p-4 flex flex-col xl:flex-row xl:flex-wrap xl:items-center justify-between gap-3.5">
       {/* CEFR Level Rail */}
       <div className="flex flex-wrap items-center gap-2.5">
         <span className="text-[11px] font-mono tracking-wide text-[var(--parlo-ink-muted)]">
@@ -79,13 +86,55 @@ export function StudioTunerBar({
         </div>
       </div>
 
+      {/* Regional Dialect Calibration Rail */}
+      {dialects.length > 0 && onSelectDialect && (
+        <div className="flex flex-wrap items-center gap-2.5">
+          <span className="text-[11px] font-mono tracking-wide text-[var(--parlo-ink-muted)]">
+            Dialect
+          </span>
+          <div
+            className="inline-flex items-center gap-1 p-1 bg-[var(--parlo-canvas)] parlo-well-recessed rounded-lg"
+            role="group"
+            aria-label="Regional dialect accent"
+          >
+            {dialects.map((dialect) => {
+              const active = dialect.id === activeDialectId;
+              return (
+                <motion.button
+                  key={dialect.id}
+                  type="button"
+                  disabled={disabled}
+                  whileTap={disabled ? undefined : { scale: 0.94 }}
+                  onClick={() => onSelectDialect(dialect.id)}
+                  title={`${dialect.regionTag} — e.g. “${dialect.signatureExpression}”`}
+                  className={`relative px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer disabled:cursor-not-allowed ${
+                    active
+                      ? "text-[var(--parlo-ink)]"
+                      : "text-[var(--parlo-ink-muted)] hover:text-[var(--parlo-ink)]"
+                  }`}
+                >
+                  {active && (
+                    <motion.span
+                      layoutId="parlo-tuner-dialect"
+                      transition={SPRING_THUMB}
+                      className="absolute inset-0 rounded-md bg-[var(--parlo-surface)] border border-[var(--parlo-border)]/80 parlo-keycap-thumb"
+                    />
+                  )}
+                  <span className="relative z-10">{dialect.label}</span>
+                </motion.button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Tactile Voice Persona Rail */}
-      <div className="flex flex-wrap items-center gap-2.5">
-        <span className="text-[11px] font-mono tracking-wide text-[var(--parlo-ink-muted)]">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-2.5 min-w-0">
+        <span className="text-[11px] font-mono tracking-wide text-[var(--parlo-ink-muted)] shrink-0">
           Partner Voice
         </span>
         <div
-          className="inline-flex flex-wrap items-center gap-1 p-1 bg-[var(--parlo-canvas)] parlo-well-recessed rounded-lg"
+          className="inline-flex items-center gap-1 p-1 bg-[var(--parlo-canvas)] parlo-well-recessed rounded-lg overflow-x-auto max-w-full no-scrollbar"
           role="group"
           aria-label="Partner voice persona"
         >
@@ -99,7 +148,7 @@ export function StudioTunerBar({
                 whileTap={disabled ? undefined : { scale: 0.94 }}
                 onClick={() => onSelectVoice(vp.id)}
                 title={`${vp.label} — ${vp.tone}`}
-                className={`relative px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer disabled:cursor-not-allowed ${
+                className={`relative px-2.5 py-1.5 sm:py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:cursor-not-allowed ${
                   active
                     ? "text-[var(--parlo-ink)]"
                     : "text-[var(--parlo-ink-muted)] hover:text-[var(--parlo-ink)]"

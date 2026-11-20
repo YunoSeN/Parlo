@@ -139,7 +139,7 @@ export function StudioLandingHero({
         </motion.div>
 
         <h1
-          className="text-5xl sm:text-6xl lg:text-[60px] font-normal tracking-[-0.03em] text-[var(--parlo-ink)] leading-[1.03] [text-wrap:balance]"
+          className="text-[34px] sm:text-5xl lg:text-[60px] font-normal tracking-[-0.03em] text-[var(--parlo-ink)] leading-[1.06] sm:leading-[1.03] [text-wrap:balance]"
           style={
             categoryFont
               ? {
@@ -155,7 +155,7 @@ export function StudioLandingHero({
             words={LANGUAGES.map((l) => `${l.name}.`)}
             className="italic font-medium text-[var(--parlo-primary)]"
           />
-          <span className="block mt-2.5 font-sans not-italic text-lg sm:text-xl font-normal text-[var(--parlo-ink-muted)] tracking-[-0.01em] leading-snug">
+          <span className="block mt-2 sm:mt-2.5 font-sans not-italic text-base sm:text-xl font-normal text-[var(--parlo-ink-muted)] tracking-[-0.01em] leading-snug">
             Real voice, real rhythm, zero rehearsal friction.
           </span>
         </h1>

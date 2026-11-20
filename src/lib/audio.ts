@@ -3,6 +3,24 @@
  * playback scheduler for Gemini Live API audio streams.
  */
 
+export function createAudioContextSafe(preferredSampleRate?: number): AudioContext {
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext;
+  if (!AudioCtx) {
+    throw new Error("Web Audio API is not supported in this browser.");
+  }
+  if (preferredSampleRate) {
+    try {
+      return new AudioCtx({ sampleRate: preferredSampleRate });
+    } catch {
+      // Safari / iOS / some Bluetooth headsets reject non-native sampleRate
+    }
+  }
+  return new AudioCtx();
+}
+
 export function downsampleAndEncodePcm16(
   input: Float32Array,
   inputSampleRate: number,
@@ -86,7 +104,7 @@ export class GaplessAudioPlayer {
 
   public async ensureContext(): Promise<AudioContext> {
     if (!this.ctx || this.ctx.state === "closed") {
-      this.ctx = new AudioContext({ sampleRate: 24000 });
+      this.ctx = createAudioContextSafe(24000);
       this.analyser = this.ctx.createAnalyser();
       this.analyser.fftSize = 512;
       this.analyser.smoothingTimeConstant = 0.78;
@@ -94,7 +112,7 @@ export class GaplessAudioPlayer {
       this.timeDomainData = new Float32Array(this.analyser.fftSize);
     }
     if (this.ctx.state === "suspended") {
-      await this.ctx.resume();
+      await this.ctx.resume().catch(() => {});
     }
     return this.ctx;
   }
@@ -102,10 +120,15 @@ export class GaplessAudioPlayer {
   public enqueuePcm24kBase64(base64: string): void {
     if (!this.ctx || !this.analyser || this.ctx.state === "closed") return;
     if (this.ctx.state === "suspended") {
-      void this.ctx.resume();
+      void this.ctx.resume().catch(() => {});
     }
 
-    const float32 = decodeBase64Pcm16ToFloat32(base64);
+    let float32: Float32Array;
+    try {
+      float32 = decodeBase64Pcm16ToFloat32(base64);
+    } catch {
+      return;
+    }
     if (float32.length === 0) return;
 
     const audioBuffer = this.ctx.createBuffer(1, float32.length, 24000);

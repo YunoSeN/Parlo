@@ -1133,10 +1133,10 @@
 .parlo-motif-dark {
   background: linear-gradient(
     135deg,
-    var(--parlo-on-solid) 0%,
-    color-mix(in srgb, var(--parlo-on-solid) 72%, var(--parlo-accent)) 100%
+    color-mix(in srgb, var(--parlo-primary) 58%, #ffffff) 0%,
+    color-mix(in srgb, var(--parlo-accent) 46%, #ffffff) 100%
   );
-  opacity: 0.11;
+  opacity: 0.12;
 }
 
 /* Per-card cultural motif bindings resolved dynamically from CULTURAL_THEMES */
@@ -1189,4 +1189,28 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Mobile & touch ergonomics */
+html,
+body {
+  overflow-x: clip;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+a,
+[role="button"],
+[role="switch"],
+[role="tab"] {
+  touch-action: manipulation;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }

@@ -12,7 +12,16 @@ import {
 import { getLanguageByCode, LANGUAGES, SCENARIOS } from "../data/catalog";
 import { speakWithBrowserTts } from "../lib/audio";
 import { CountryFontSpec, getCultureByLanguage } from "../lib/cultures";
-import { SavedPhrase } from "../types";
+import { sfxEngine } from "../lib/sfx";
+import {
+  computeNextSrsState,
+  formatIntervalLabel,
+  isSrsCardDue,
+  readSrsScheduleMap,
+  saveSrsScheduleMap,
+  SrsScheduleMap,
+} from "../lib/srs";
+import { SavedPhrase, SrsRating } from "../types";
 import { CulturalMotifArt } from "./CulturalMotifArt";
 import { EditorialTextReveal } from "./EditorialTextReveal";
 import { LanguageFlagBadge } from "./LanguageFlagBadge";
@@ -44,6 +53,10 @@ export function PhrasebookView({
 }: PhrasebookViewProps) {
   const [filterLang, setFilterLang] = useState<string>("all");
   const [mode, setMode] = useState<"list" | "flashcards">("list");
+  const [deckFilter, setDeckFilter] = useState<"due" | "all">("due");
+  const [srsMap, setSrsMap] = useState<SrsScheduleMap>(() =>
+    readSrsScheduleMap()
+  );
   const [cardIndex, setCardIndex] = useState(0);
   const [slideDir, setSlideDir] = useState<1 | -1>(1);
   const [revealed, setRevealed] = useState(false);
@@ -108,13 +121,52 @@ export function PhrasebookView({
     [filtered]
   );
 
+  const dueFiltered = useMemo(
+    () => filtered.filter((p) => isSrsCardDue(srsMap[p.id])),
+    [filtered, srsMap]
+  );
+
+  const flashcardDeck = deckFilter === "due" ? dueFiltered : filtered;
+
   const safeCardIndex =
-    filtered.length > 0 ? Math.min(cardIndex, filtered.length - 1) : 0;
-  const currentCard = filtered[safeCardIndex];
+    flashcardDeck.length > 0
+      ? Math.min(cardIndex, flashcardDeck.length - 1)
+      : 0;
+  const currentCard = flashcardDeck[safeCardIndex];
+  const currentCardSrs = currentCard ? srsMap[currentCard.id] : undefined;
+
+  const handleRateCard = (rating: SrsRating) => {
+    if (!currentCard) return;
+    const nextState = computeNextSrsState(srsMap[currentCard.id], rating);
+    const updatedMap: SrsScheduleMap = {
+      ...srsMap,
+      [currentCard.id]: nextState,
+    };
+    setSrsMap(updatedMap);
+    saveSrsScheduleMap(updatedMap);
+
+    if (rating === "again") {
+      sfxEngine.playToggle(false);
+    } else {
+      sfxEngine.playSavePhrase();
+    }
+
+    if (!currentCard.mastered && nextState.repetitions >= 3) {
+      onToggleMastered(currentCard.id);
+    }
+
+    setRevealed(false);
+    setSlideDir(1);
+    if (deckFilter === "all" && flashcardDeck.length > 1) {
+      setCardIndex((prev) => (prev + 1) % flashcardDeck.length);
+    } else {
+      setCardIndex(0);
+    }
+  };
 
   // Keyboard shortcuts in Flashcard mode: Space flips card, Left/Right navigates deck
   useEffect(() => {
-    if (mode !== "flashcards" || filtered.length === 0) return;
+    if (mode !== "flashcards" || flashcardDeck.length === 0) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (
         e.target instanceof HTMLInputElement ||
@@ -129,18 +181,20 @@ export function PhrasebookView({
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
         setSlideDir(1);
-        setCardIndex((prev) => (prev + 1) % filtered.length);
+        setCardIndex((prev) => (prev + 1) % flashcardDeck.length);
         setRevealed(false);
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
         setSlideDir(-1);
-        setCardIndex((prev) => (prev === 0 ? filtered.length - 1 : prev - 1));
+        setCardIndex((prev) =>
+          prev === 0 ? flashcardDeck.length - 1 : prev - 1
+        );
         setRevealed(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [filtered.length, mode]);
+  }, [flashcardDeck.length, mode]);
 
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -159,7 +213,7 @@ export function PhrasebookView({
   };
 
   return (
-    <div className="max-w-[1200px] mx-auto px-6 py-8">
+    <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-6 sm:py-8">
       <div className="relative overflow-hidden rounded-2xl border border-[var(--parlo-border)] bg-[var(--parlo-surface)] parlo-machined-frame p-6 sm:p-8 flex flex-col md:flex-row md:items-end justify-between gap-6">
         <div
           aria-hidden="true"
@@ -338,7 +392,7 @@ export function PhrasebookView({
                         scenarioTitle: item.source,
                       })
                     }
-                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg border border-[var(--parlo-border)] bg-[var(--parlo-surface-alt)] text-[var(--parlo-ink)] hover:border-[var(--parlo-primary)] hover:text-[var(--parlo-primary)] disabled:opacity-60 disabled:text-emerald-700 transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg border border-[var(--parlo-border)] bg-[var(--parlo-surface-alt)] text-[var(--parlo-ink)] hover:border-[var(--parlo-primary)] hover:text-[var(--parlo-primary)] disabled:opacity-75 disabled:text-emerald-500 transition-colors cursor-pointer"
                   >
                     {alreadySaved ? (
                       <>
@@ -444,7 +498,7 @@ export function PhrasebookView({
 
       {/* Filter & Summary Row */}
       <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-1 p-1 bg-[var(--parlo-surface-alt)] border border-[var(--parlo-border)] parlo-well-recessed rounded-xl overflow-x-auto">
+        <div className="flex items-center gap-1 p-1 bg-[var(--parlo-surface-alt)] border border-[var(--parlo-border)] parlo-well-recessed rounded-xl overflow-x-auto no-scrollbar max-w-full">
           {[{ code: "all", name: "All Languages" }, ...LANGUAGES].map((lang) => {
             const active = filterLang === lang.code;
             return (
@@ -500,210 +554,347 @@ export function PhrasebookView({
             Click Save Phrase on any turn or coach correction during a Studio conversation, or add your own expression above.
           </p>
         </div>
-      ) : mode === "flashcards" && currentCard ? (
-        <div className="mt-10 max-w-2xl mx-auto">
-          {/* Physical 3D Stacked Deck Stage */}
-          <div className="parlo-flip-scene relative">
-            {/* Layered depth deck cards beneath active card */}
-            {filtered.length > 2 && (
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-x-6 -bottom-3 h-full rounded-2xl bg-[var(--parlo-surface)]/70 border border-[var(--parlo-border)] -z-20"
-                style={{ transform: "translateY(8px) scale(0.94)" }}
-              />
-            )}
-            {filtered.length > 1 && (
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-x-3 -bottom-1.5 h-full rounded-2xl bg-[var(--parlo-surface)]/88 border border-[var(--parlo-border)] -z-10"
-                style={{ transform: "translateY(4px) scale(0.97)" }}
-              />
-            )}
-
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.div
-                key={currentCard.id}
-                initial={{ opacity: 0, x: slideDir * 44, rotateZ: slideDir * 1.5 }}
-                animate={{ opacity: 1, x: 0, rotateZ: 0 }}
-                exit={{ opacity: 0, x: slideDir * -44, rotateZ: slideDir * -1.5 }}
-                transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
-              >
-                <motion.div
-                  onClick={() => setRevealed((r) => !r)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      setRevealed((r) => !r);
-                    }
-                  }}
-                  aria-label={
-                    revealed
-                      ? "Showing translation. Click to flip back to expression."
-                      : "Showing expression. Click to flip card and reveal translation."
-                  }
-                  animate={{ rotateY: revealed ? 180 : 0 }}
-                  transition={{
-                    type: "spring",
-                    stiffness: 260,
-                    damping: 26,
-                  }}
-                  className="parlo-flip-card min-h-[340px] w-full cursor-pointer select-none"
-                >
-                  {/* FRONT FACE: Target Language Expression */}
-                  <div className="parlo-flip-face overflow-hidden absolute inset-0 bg-[var(--parlo-surface)] border border-[var(--parlo-border)] rounded-2xl parlo-surface-elevated p-8 sm:p-10 flex flex-col justify-between text-center">
-                    <div
-                      aria-hidden="true"
-                      data-culture={currentCard.languageCode}
-                      className="parlo-motif-overlay parlo-motif-corner"
-                    />
-                    <div className="relative z-10 flex items-center justify-between text-xs text-[var(--parlo-ink-muted)] tabular-nums">
-                      <span>
-                        {getLanguageByCode(currentCard.languageCode).name} ·{" "}
-                        {currentCard.scenarioTitle}
-                      </span>
-                      <span className="font-mono">
-                        {safeCardIndex + 1} / {filtered.length}
-                      </span>
-                    </div>
-
-                    <div className="relative z-10 my-6">
-                      <p className="font-display text-2xl sm:text-3xl font-semibold text-[var(--parlo-ink)] leading-snug">
-                        {currentCard.phrase}
-                      </p>
-                      {currentCard.reading && (
-                        <p className="mt-2 font-mono text-sm text-[var(--parlo-ink-muted)]">
-                          {currentCard.reading}
-                        </p>
-                      )}
-
-                      <div className="mt-5 flex items-center justify-center">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            speakWithBrowserTts(
-                              currentCard.phrase,
-                              getLanguageByCode(currentCard.languageCode)
-                                .speechLocale
-                            );
-                          }}
-                          className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium text-[var(--parlo-ink)] bg-[var(--parlo-canvas)] border border-[var(--parlo-border)] hover:border-[var(--parlo-ink)] rounded-lg transition-colors cursor-pointer"
-                        >
-                          <Volume2 className="w-4 h-4 text-[var(--parlo-primary)]" aria-hidden="true" />
-                          Listen
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="relative z-10 pt-4 border-t border-[var(--parlo-border)]/70 flex items-center justify-between text-xs text-[var(--parlo-ink-muted)]">
-                      <span>Front · Expression</span>
-                      <span className="font-mono text-[var(--parlo-primary)]">
-                        Click or press Space to flip
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* BACK FACE: English Meaning & Usage Note */}
-                  <div className="parlo-flip-face parlo-flip-back overflow-hidden absolute inset-0 bg-[var(--parlo-ink)] text-[var(--parlo-on-solid)] border border-[var(--parlo-ink)] rounded-2xl parlo-surface-elevated p-8 sm:p-10 flex flex-col justify-between text-center">
-                    <div
-                      aria-hidden="true"
-                      data-culture={currentCard.languageCode}
-                      className="parlo-motif-overlay parlo-motif-corner parlo-motif-dark"
-                    />
-                    <div className="relative z-10 flex items-center justify-between text-xs text-[var(--parlo-on-solid)]/65 tabular-nums">
-                      <span>
-                        {getLanguageByCode(currentCard.languageCode).name} · Translation
-                      </span>
-                      <span className="font-mono">
-                        {safeCardIndex + 1} / {filtered.length}
-                      </span>
-                    </div>
-
-                    <div className="relative z-10 my-6 space-y-3">
-                      <p className="font-display text-2xl sm:text-3xl font-semibold text-[var(--parlo-on-solid)] leading-snug">
-                        {currentCard.translation}
-                      </p>
-                      <p className="font-mono text-xs text-[var(--parlo-on-solid)]/70">
-                        {currentCard.phrase}
-                      </p>
-                      {currentCard.note && (
-                        <p className="mt-2 text-sm text-[var(--parlo-on-solid)]/80 max-w-md mx-auto leading-relaxed">
-                          {currentCard.note}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="relative z-10 pt-4 border-t border-white/15 flex items-center justify-between text-xs text-[var(--parlo-on-solid)]/70">
-                      <span>Back · Meaning</span>
-                      <span className="font-mono text-[var(--parlo-accent)]">
-                        Click or press Space to flip back
-                      </span>
-                    </div>
-                  </div>
-                </motion.div>
-              </motion.div>
-            </AnimatePresence>
-          </div>
-
-          <div className="mt-7 flex items-center justify-between">
-            <motion.button
-              type="button"
-              whileHover={{ x: -2 }}
-              whileTap={{ scale: 0.97 }}
-              onClick={() => {
-                setSlideDir(-1);
-                setCardIndex((prev) =>
-                  prev === 0 ? filtered.length - 1 : prev - 1
-                );
-                setRevealed(false);
-              }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-[var(--parlo-ink)] bg-[var(--parlo-surface)] border border-[var(--parlo-border)] hover:border-[var(--parlo-ink)] rounded-lg transition-colors cursor-pointer"
+      ) : mode === "flashcards" ? (
+        <div className="mt-8 max-w-2xl mx-auto">
+          {/* Smart Spaced-Repetition Deck Filter */}
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+            <div
+              className="inline-flex items-center gap-1 p-1 bg-[var(--parlo-surface-alt)] border border-[var(--parlo-border)] parlo-well-recessed rounded-xl"
+              role="group"
+              aria-label="Flashcard review queue"
             >
-              <ChevronLeft className="w-4 h-4" aria-hidden="true" />
-              Previous
-            </motion.button>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setRevealed((r) => !r)}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[var(--parlo-ink-muted)] hover:text-[var(--parlo-ink)] cursor-pointer"
-              >
-                <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
-                Flip Card
-              </button>
-              <motion.button
-                type="button"
-                whileTap={{ scale: 0.96 }}
-                onClick={() => onToggleMastered(currentCard.id)}
-                className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-lg border transition-colors cursor-pointer ${
-                  currentCard.mastered
-                    ? "bg-emerald-50 border-emerald-200 text-emerald-800"
-                    : "bg-[var(--parlo-surface)] border-[var(--parlo-border)] text-[var(--parlo-ink)] hover:border-[var(--parlo-ink)]"
-                }`}
-              >
-                <Check className="w-3.5 h-3.5" aria-hidden="true" />
-                {currentCard.mastered ? "Mastered" : "Mark Mastered"}
-              </motion.button>
+              {(
+                [
+                  { id: "due", label: `Due Today (${dueFiltered.length})` },
+                  { id: "all", label: `All Saved (${filtered.length})` },
+                ] as const
+              ).map((opt) => {
+                const active = deckFilter === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => {
+                      sfxEngine.playNav();
+                      setDeckFilter(opt.id);
+                      setCardIndex(0);
+                      setRevealed(false);
+                    }}
+                    className={`relative px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap tabular-nums cursor-pointer ${
+                      active
+                        ? "text-[var(--parlo-ink)]"
+                        : "text-[var(--parlo-ink-muted)] hover:text-[var(--parlo-ink)]"
+                    }`}
+                  >
+                    {active && (
+                      <motion.span
+                        layoutId="parlo-srs-queue"
+                        transition={SPRING_TAB}
+                        className="absolute inset-0 rounded-lg bg-[var(--parlo-surface)] parlo-keycap-thumb"
+                      />
+                    )}
+                    <span className="relative z-10">{opt.label}</span>
+                  </button>
+                );
+              })}
             </div>
 
-            <motion.button
-              type="button"
-              whileHover={{ x: 2 }}
-              whileTap={{ scale: 0.97 }}
-              onClick={() => {
-                setSlideDir(1);
-                setCardIndex((prev) => (prev + 1) % filtered.length);
-                setRevealed(false);
-              }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-[var(--parlo-ink)] bg-[var(--parlo-surface)] border border-[var(--parlo-border)] hover:border-[var(--parlo-ink)] rounded-lg transition-colors cursor-pointer"
-            >
-              Next
-              <ChevronRight className="w-4 h-4" aria-hidden="true" />
-            </motion.button>
+            <span className="text-xs font-mono text-[var(--parlo-ink-muted)] tabular-nums">
+              Smart SM-2 Spaced Repetition
+            </span>
           </div>
+
+          {!currentCard ? (
+            <div className="bg-[var(--parlo-surface)] border border-[var(--parlo-border)] rounded-2xl parlo-surface-elevated p-10 text-center space-y-3">
+              <h2 className="font-display text-xl font-semibold text-[var(--parlo-ink)]">
+                All caught up for today
+              </h2>
+              <p className="text-sm text-[var(--parlo-ink-muted)] max-w-md mx-auto">
+                Every saved phrase in this language filter is scheduled for a future review. Switch to All Saved anytime for extra practice.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  sfxEngine.playNav();
+                  setDeckFilter("all");
+                  setCardIndex(0);
+                  setRevealed(false);
+                }}
+                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-[var(--parlo-on-solid)] bg-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-hover)] rounded-lg transition-colors cursor-pointer"
+              >
+                Practice All Saved ({filtered.length})
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Physical 3D Stacked Deck Stage */}
+              <div className="parlo-flip-scene relative">
+                {flashcardDeck.length > 2 && (
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-x-6 -bottom-3 h-full rounded-2xl bg-[var(--parlo-surface)]/70 border border-[var(--parlo-border)] -z-20"
+                    style={{ transform: "translateY(8px) scale(0.94)" }}
+                  />
+                )}
+                {flashcardDeck.length > 1 && (
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-x-3 -bottom-1.5 h-full rounded-2xl bg-[var(--parlo-surface)]/88 border border-[var(--parlo-border)] -z-10"
+                    style={{ transform: "translateY(4px) scale(0.97)" }}
+                  />
+                )}
+
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.div
+                    key={currentCard.id}
+                    initial={{ opacity: 0, x: slideDir * 44, rotateZ: slideDir * 1.5 }}
+                    animate={{ opacity: 1, x: 0, rotateZ: 0 }}
+                    exit={{ opacity: 0, x: slideDir * -44, rotateZ: slideDir * -1.5 }}
+                    transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+                  >
+                    <motion.div
+                      onClick={() => {
+                        sfxEngine.playFlipCard();
+                        setRevealed((r) => !r);
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setRevealed((r) => !r);
+                        }
+                      }}
+                      aria-label={
+                        revealed
+                          ? "Showing translation. Click to flip back to expression."
+                          : "Showing expression. Click to flip card and reveal translation."
+                      }
+                      animate={{ rotateY: revealed ? 180 : 0 }}
+                      transition={{
+                        type: "spring",
+                        stiffness: 260,
+                        damping: 26,
+                      }}
+                      className="parlo-flip-card min-h-[340px] w-full cursor-pointer select-none"
+                    >
+                      {/* FRONT FACE: Target Language Expression */}
+                      <div className="parlo-flip-face overflow-hidden absolute inset-0 bg-[var(--parlo-surface)] border border-[var(--parlo-border)] rounded-2xl parlo-surface-elevated p-8 sm:p-10 flex flex-col justify-between text-center">
+                        <div
+                          aria-hidden="true"
+                          data-culture={currentCard.languageCode}
+                          className="parlo-motif-overlay parlo-motif-corner"
+                        />
+                        <div className="relative z-10 flex items-center justify-between text-xs text-[var(--parlo-ink-muted)] tabular-nums">
+                          <span>
+                            {getLanguageByCode(currentCard.languageCode).name} ·{" "}
+                            {currentCard.scenarioTitle}
+                          </span>
+                          <span className="font-mono">
+                            {safeCardIndex + 1} / {flashcardDeck.length} ·{" "}
+                            {formatIntervalLabel(currentCardSrs?.intervalDays ?? 0)}
+                          </span>
+                        </div>
+
+                        <div className="relative z-10 my-6">
+                          <p className="font-display text-2xl sm:text-3xl font-semibold text-[var(--parlo-ink)] leading-snug">
+                            {currentCard.phrase}
+                          </p>
+                          {currentCard.reading && (
+                            <p className="mt-2 font-mono text-sm text-[var(--parlo-ink-muted)]">
+                              {currentCard.reading}
+                            </p>
+                          )}
+
+                          <div className="mt-5 flex items-center justify-center">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                speakWithBrowserTts(
+                                  currentCard.phrase,
+                                  getLanguageByCode(currentCard.languageCode)
+                                    .speechLocale
+                                );
+                              }}
+                              className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium text-[var(--parlo-ink)] bg-[var(--parlo-canvas)] border border-[var(--parlo-border)] hover:border-[var(--parlo-ink)] rounded-lg transition-colors cursor-pointer"
+                            >
+                              <Volume2
+                                className="w-4 h-4 text-[var(--parlo-primary)]"
+                                aria-hidden="true"
+                              />
+                              Listen
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="relative z-10 pt-4 border-t border-[var(--parlo-border)]/70 flex items-center justify-between text-xs text-[var(--parlo-ink-muted)]">
+                          <span>Front · Expression</span>
+                          <span className="font-mono text-[var(--parlo-primary)]">
+                            Click or press Space to flip
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* BACK FACE: English Meaning & Usage Note */}
+                      <div className="parlo-flip-face parlo-flip-back overflow-hidden absolute inset-0 bg-[var(--parlo-ink)] text-[var(--parlo-on-solid)] border border-[var(--parlo-ink)] rounded-2xl parlo-surface-elevated p-8 sm:p-10 flex flex-col justify-between text-center">
+                        <div
+                          aria-hidden="true"
+                          data-culture={currentCard.languageCode}
+                          className="parlo-motif-overlay parlo-motif-corner parlo-motif-dark"
+                        />
+                        <div className="relative z-10 flex items-center justify-between text-xs text-[var(--parlo-on-solid)]/65 tabular-nums">
+                          <span>
+                            {getLanguageByCode(currentCard.languageCode).name} ·
+                            Translation
+                          </span>
+                          <span className="font-mono">
+                            {safeCardIndex + 1} / {flashcardDeck.length}
+                          </span>
+                        </div>
+
+                        <div className="relative z-10 my-6 space-y-3">
+                          <p className="font-display text-2xl sm:text-3xl font-semibold text-[var(--parlo-on-solid)] leading-snug">
+                            {currentCard.translation}
+                          </p>
+                          <p className="font-mono text-xs text-[var(--parlo-on-solid)]/70">
+                            {currentCard.phrase}
+                          </p>
+                          {currentCard.note && (
+                            <p className="mt-2 text-sm text-[var(--parlo-on-solid)]/80 max-w-md mx-auto leading-relaxed">
+                              {currentCard.note}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="relative z-10 pt-4 border-t border-[var(--parlo-on-solid)]/18 flex items-center justify-between text-xs text-[var(--parlo-on-solid)]/70">
+                          <span>Back · Rate recall below</span>
+                          <span className="font-mono text-[var(--parlo-accent)]">
+                            Click or press Space to flip back
+                          </span>
+                        </div>
+                      </div>
+                    </motion.div>
+                  </motion.div>
+                </AnimatePresence>
+              </div>
+
+              {/* SM-2 Recall Rating Bar (shown when flipped) */}
+              <AnimatePresence initial={false}>
+                {revealed && (
+                  <motion.div
+                    key="srs-rating-bar"
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 6 }}
+                    transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                    className="mt-5 p-3 rounded-xl bg-[var(--parlo-surface)] border border-[var(--parlo-border)] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  >
+                    <span className="text-xs text-[var(--parlo-ink-muted)]">
+                      How easily did you recall this phrase?
+                    </span>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(
+                        [
+                          {
+                            rating: "again" as SrsRating,
+                            label: "Again",
+                            tone: "border-red-500/35 text-red-500 hover:bg-red-500/10",
+                          },
+                          {
+                            rating: "good" as SrsRating,
+                            label: "Good",
+                            tone: "border-[var(--parlo-primary)]/45 text-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-soft)]",
+                          },
+                          {
+                            rating: "easy" as SrsRating,
+                            label: "Easy",
+                            tone: "border-emerald-500/40 text-emerald-500 hover:bg-emerald-500/10",
+                          },
+                        ] as const
+                      ).map(({ rating, label, tone }) => {
+                        const preview = computeNextSrsState(
+                          currentCardSrs,
+                          rating
+                        );
+                        return (
+                          <button
+                            key={rating}
+                            type="button"
+                            onClick={() => handleRateCard(rating)}
+                            className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors whitespace-nowrap tabular-nums cursor-pointer ${tone}`}
+                          >
+                            {label} · {formatIntervalLabel(preview.intervalDays)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+                <motion.button
+                  type="button"
+                  whileHover={{ x: -2 }}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => {
+                    setSlideDir(-1);
+                    setCardIndex((prev) =>
+                      prev === 0 ? flashcardDeck.length - 1 : prev - 1
+                    );
+                    setRevealed(false);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-[var(--parlo-ink)] bg-[var(--parlo-surface)] border border-[var(--parlo-border)] hover:border-[var(--parlo-ink)] rounded-lg transition-colors cursor-pointer"
+                >
+                  <ChevronLeft className="w-4 h-4" aria-hidden="true" />
+                  Previous
+                </motion.button>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      sfxEngine.playFlipCard();
+                      setRevealed((r) => !r);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[var(--parlo-ink-muted)] hover:text-[var(--parlo-ink)] cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                    Flip Card
+                  </button>
+                  <motion.button
+                    type="button"
+                    whileTap={{ scale: 0.96 }}
+                    onClick={() => onToggleMastered(currentCard.id)}
+                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-lg border transition-colors cursor-pointer ${
+                      currentCard.mastered
+                        ? "bg-emerald-500/12 border-emerald-500/35 text-emerald-500"
+                        : "bg-[var(--parlo-surface)] border-[var(--parlo-border)] text-[var(--parlo-ink)] hover:border-[var(--parlo-ink)]"
+                    }`}
+                  >
+                    <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                    {currentCard.mastered ? "Mastered" : "Mark Mastered"}
+                  </motion.button>
+                </div>
+
+                <motion.button
+                  type="button"
+                  whileHover={{ x: 2 }}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => {
+                    setSlideDir(1);
+                    setCardIndex((prev) => (prev + 1) % flashcardDeck.length);
+                    setRevealed(false);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-[var(--parlo-ink)] bg-[var(--parlo-surface)] border border-[var(--parlo-border)] hover:border-[var(--parlo-ink)] rounded-lg transition-colors cursor-pointer"
+                >
+                  Next
+                  <ChevronRight className="w-4 h-4" aria-hidden="true" />
+                </motion.button>
+              </div>
+            </>
+          )}
         </div>
       ) : (
         <div className="mt-6 bg-[var(--parlo-surface)] border border-[var(--parlo-border)] rounded-xl parlo-surface-elevated divide-y divide-[var(--parlo-border)]/70">

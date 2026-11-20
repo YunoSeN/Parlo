@@ -83,7 +83,7 @@ export function LanguageCultureMenu({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6, scale: 0.97 }}
             transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute right-0 mt-2 w-[340px] sm:w-[390px] rounded-2xl bg-[var(--parlo-surface-solid)]/95 backdrop-blur-xl border border-[var(--parlo-border)] parlo-card-tactile overflow-hidden z-50"
+            className="absolute right-0 mt-2 w-[min(380px,calc(100vw-1.5rem))] rounded-2xl bg-[var(--parlo-surface-solid)]/96 backdrop-blur-xl border border-[var(--parlo-border)] parlo-card-tactile overflow-hidden z-50"
           >
             <div className="px-4 py-3 border-b border-[var(--parlo-border)]/75 flex items-center justify-between gap-2 bg-[var(--parlo-surface-alt)]">
               <span className="text-xs font-semibold text-[var(--parlo-ink)]">

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   computeRms,
+  createAudioContextSafe,
   downsampleAndEncodePcm16,
   GaplessAudioPlayer,
 } from "../lib/audio";
@@ -22,6 +23,8 @@ export type LiveConnectionState =
 
 export interface LiveSessionParams {
   language: LanguageOption;
+  dialectLabel?: string;
+  dialectDirective?: string;
   level: CefrLevel;
   voiceName: VoiceName;
   scenario: Scenario;
@@ -54,6 +57,7 @@ export function useLivePartner(params: LiveSessionParams) {
   const turnsRef = useRef<TranscriptTurn[]>([]);
   const activeUserTurnIdRef = useRef<string | null>(null);
   const activePartnerTurnIdRef = useRef<string | null>(null);
+  const sessionSeqRef = useRef(0);
   const onUserTurnFinalizedRef = useRef(params.onUserTurnFinalized);
 
   useEffect(() => {
@@ -196,6 +200,7 @@ export function useLivePartner(params: LiveSessionParams) {
   );
 
   const teardownMediaAndSocket = useCallback(async () => {
+    sessionSeqRef.current += 1;
     isReadyRef.current = false;
 
     if (processorRef.current) {
@@ -269,6 +274,8 @@ export function useLivePartner(params: LiveSessionParams) {
 
   const startSession = useCallback(async () => {
     await teardownMediaAndSocket();
+    const currentSeq = sessionSeqRef.current;
+
     setErrorMessage(null);
     setConnectionState("connecting");
     setElapsedSeconds(0);
@@ -282,11 +289,23 @@ export function useLivePartner(params: LiveSessionParams) {
       setIsPartnerSpeaking(speaking);
     });
     playerRef.current = player;
-    await player.ensureContext();
+    try {
+      await player.ensureContext();
+    } catch {
+      // Allow typed fallback if audio output is restricted
+    }
+
+    if (sessionSeqRef.current !== currentSeq) {
+      await player.dispose();
+      return;
+    }
 
     // Attempt microphone access (16kHz input)
     let stream: MediaStream | null = null;
     try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error("Microphone API unavailable");
+      }
       stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -295,8 +314,14 @@ export function useLivePartner(params: LiveSessionParams) {
           autoGainControl: true,
         },
       });
+      if (sessionSeqRef.current !== currentSeq) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      mediaStreamRef.current = stream;
       setMicAvailable(true);
     } catch {
+      if (sessionSeqRef.current !== currentSeq) return;
       // Allow text-input fallback even if microphone permission is unavailable
       setMicAvailable(false);
       setIsMuted(true);
@@ -314,6 +339,8 @@ export function useLivePartner(params: LiveSessionParams) {
           config: {
             languageName: params.language.name,
             languageNative: params.language.nativeName,
+            dialectLabel: params.dialectLabel,
+            dialectDirective: params.dialectDirective,
             level: params.level,
             voiceName: params.voiceName,
             scenarioTitle: params.scenario.title,
@@ -343,49 +370,61 @@ export function useLivePartner(params: LiveSessionParams) {
       }
 
       if (msg.type === "ready") {
+        if (sessionSeqRef.current !== currentSeq) return;
         if (!isReadyRef.current) {
           isReadyRef.current = true;
           setConnectionState("live");
 
           // Start capturing mic audio now that Gemini Live is ready
-          if (stream) {
-            mediaStreamRef.current = stream;
-            const inputCtx = new AudioContext({ sampleRate: 16000 });
-            inputCtxRef.current = inputCtx;
-            const source = inputCtx.createMediaStreamSource(stream);
-            sourceNodeRef.current = source;
-            const processor = inputCtx.createScriptProcessor(4096, 1, 1);
-            processorRef.current = processor;
-
-            processor.onaudioprocess = (audioEvent) => {
-              if (
-                !isReadyRef.current ||
-                isMutedRef.current ||
-                ws.readyState !== WebSocket.OPEN
-              ) {
-                userLevelRef.current *= 0.8;
-                return;
+          const activeStream = mediaStreamRef.current ?? stream;
+          if (activeStream) {
+            try {
+              const inputCtx = createAudioContextSafe(16000);
+              inputCtxRef.current = inputCtx;
+              if (inputCtx.state === "suspended") {
+                void inputCtx.resume().catch(() => {});
               }
-              const channelData = audioEvent.inputBuffer.getChannelData(0);
-              userLevelRef.current = computeRms(channelData);
-              const base64 = downsampleAndEncodePcm16(
-                channelData,
-                inputCtx.sampleRate,
-                16000
-              );
-              ws.send(JSON.stringify({ type: "audio", data: base64 }));
-            };
+              const source = inputCtx.createMediaStreamSource(activeStream);
+              sourceNodeRef.current = source;
+              const processor = inputCtx.createScriptProcessor(4096, 1, 1);
+              processorRef.current = processor;
 
-            source.connect(processor);
-            // Route through silent gain node so mic doesn't echo back to speakers
-            const silentGain = inputCtx.createGain();
-            silentGain.gain.value = 0;
-            processor.connect(silentGain);
-            silentGain.connect(inputCtx.destination);
+              processor.onaudioprocess = (audioEvent) => {
+                if (
+                  !isReadyRef.current ||
+                  isMutedRef.current ||
+                  ws.readyState !== WebSocket.OPEN
+                ) {
+                  userLevelRef.current *= 0.8;
+                  return;
+                }
+                const channelData = audioEvent.inputBuffer.getChannelData(0);
+                userLevelRef.current = computeRms(channelData);
+                const base64 = downsampleAndEncodePcm16(
+                  channelData,
+                  inputCtx.sampleRate,
+                  16000
+                );
+                ws.send(JSON.stringify({ type: "audio", data: base64 }));
+              };
+
+              source.connect(processor);
+              // Route through silent gain node so mic doesn't echo back to speakers
+              const silentGain = inputCtx.createGain();
+              silentGain.gain.value = 0;
+              processor.connect(silentGain);
+              silentGain.connect(inputCtx.destination);
+            } catch {
+              setMicAvailable(false);
+              setIsMuted(true);
+              isMutedRef.current = true;
+            }
           }
 
           // Prompt partner to greet the learner right away
-          ws.send(JSON.stringify({ type: "promptGreeting" }));
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "promptGreeting" }));
+          }
         }
         return;
       }
@@ -439,8 +478,9 @@ export function useLivePartner(params: LiveSessionParams) {
     };
 
     ws.onclose = () => {
-      if (isReadyRef.current) {
+      if (wsRef.current === ws) {
         isReadyRef.current = false;
+        void teardownMediaAndSocket();
         setConnectionState((prev) => (prev === "error" ? "error" : "idle"));
       }
     };
@@ -448,6 +488,8 @@ export function useLivePartner(params: LiveSessionParams) {
     appendTranscriptDelta,
     finalizeActivePartnerTurn,
     params.correctionStyle,
+    params.dialectDirective,
+    params.dialectLabel,
     params.language.name,
     params.language.nativeName,
     params.level,

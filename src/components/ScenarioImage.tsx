@@ -23,7 +23,7 @@ export function ScenarioImage({
   if (!src || failed) {
     return (
       <div
-        className={`relative overflow-hidden bg-gradient-to-br ${fallbackGradient} flex flex-col items-center justify-center text-white/80 p-4 ${className}`}
+        className={`relative overflow-hidden bg-gradient-to-br ${fallbackGradient} flex flex-col items-center justify-center text-[#f8fafc]/85 p-4 ${className}`}
       >
         <Globe2 className="w-6 h-6 mb-1.5 opacity-75" aria-hidden="true" />
         <span className="text-xs font-medium text-center line-clamp-2 opacity-90">
@@ -34,7 +34,7 @@ export function ScenarioImage({
   }
 
   return (
-    <div className={`relative overflow-hidden bg-slate-900 ${className}`}>
+    <div className={`relative overflow-hidden bg-[#0e1118] ${className}`}>
       <img
         src={src}
         alt={alt}
@@ -44,7 +44,7 @@ export function ScenarioImage({
       />
       {scrim && (
         <div
-          className="absolute inset-0 bg-gradient-to-t from-slate-950/75 via-slate-950/25 to-transparent pointer-events-none"
+          className="absolute inset-0 bg-gradient-to-t from-[#05070c]/75 via-[#05070c]/20 to-transparent pointer-events-none"
           aria-hidden="true"
         />
       )}

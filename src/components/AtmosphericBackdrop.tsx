@@ -142,9 +142,9 @@ export function AtmosphericBackdrop({
           pulsating={profile.pulsating}
           followMouse={!prefersReducedMotion}
           mouseInfluence={0.2}
-          noiseAmount={0.04}
-          distortion={0.06}
-          intensity={isDark ? 0.42 : 0.16}
+          noiseAmount={0.035}
+          distortion={0.05}
+          intensity={isDark ? 0.34 : 0.13}
         />
       </div>
 
@@ -205,7 +205,7 @@ export function AtmosphericBackdrop({
             ? { top: "7%", right: "-5%" }
             : { x: ringX, y: ringY, top: "7%", right: "-5%" }
         }
-        className="hidden lg:flex items-center justify-center absolute w-[420px] h-[420px] opacity-55"
+        className="hidden lg:flex items-center justify-center absolute w-[420px] h-[420px] opacity-35"
       >
         <div className="parlo-arch-ring-outer w-full h-full flex items-center justify-center p-12">
           <div className="parlo-arch-ring-inner w-full h-full flex items-center justify-center p-12">

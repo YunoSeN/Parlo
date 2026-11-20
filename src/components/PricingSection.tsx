@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowRight,
@@ -121,6 +121,10 @@ export function PricingSection({
   const [openFaqIdx, setOpenFaqIdx] = useState<number | null>(0);
   const [showCompare, setShowCompare] = useState<boolean>(false);
 
+  useEffect(() => {
+    setSelectedPlan(activePlanId);
+  }, [activePlanId]);
+
   const plusPrice = billing === "annual" ? 14 : 18;
   const plusAnnualTotal = 14 * 12;
 
@@ -149,7 +153,7 @@ export function PricingSection({
 
   return (
     <div
-      className={`max-w-[1200px] mx-auto px-6 py-8 text-[var(--parlo-ink)] ${className}`}
+      className={`max-w-[1200px] mx-auto px-4 sm:px-6 py-6 sm:py-8 text-[var(--parlo-ink)] ${className}`}
     >
       {/* Cultural Editorial Page Header matching ReviewView & ScenariosView */}
       <div className="relative overflow-hidden rounded-2xl border border-[var(--parlo-border)] bg-[var(--parlo-surface)] parlo-machined-frame p-6 sm:p-8 flex flex-col md:flex-row md:items-end justify-between gap-6">
@@ -303,7 +307,7 @@ export function PricingSection({
                 onChange={(e) => setTeamEmail(e.target.value)}
                 placeholder="director@academy.edu"
                 aria-label="Work or academic email"
-                className="px-3 py-2 text-xs bg-[var(--parlo-canvas)] border border-[var(--parlo-border)] rounded-lg text-[var(--parlo-ink)] placeholder:text-[var(--parlo-ink-muted)] focus:outline-2 focus:outline-[var(--parlo-primary)] min-w-[210px]"
+                className="px-3 py-2 text-xs bg-[var(--parlo-canvas)] border border-[var(--parlo-border)] rounded-lg text-[var(--parlo-ink)] placeholder:text-[var(--parlo-ink-muted)] focus:outline-2 focus:outline-[var(--parlo-primary)] min-w-0 flex-1 sm:min-w-[210px]"
               />
               <button
                 type="submit"
@@ -320,10 +324,10 @@ export function PricingSection({
       <div className="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
         {/* Category 01: Listener (Free) */}
         <TiltCard3D
-          maxTilt={4.5}
-          magneticPull={4}
-          hoverScale={1.01}
-          glare={true}
+          maxTilt={4}
+          magneticPull={3}
+          hoverScale={1.008}
+          glare={false}
           className={`bg-[var(--parlo-surface)] rounded-2xl border flex flex-col overflow-hidden transition-colors shadow-sm hover:shadow-xl ${
             selectedPlan === "starter"
               ? "border-[var(--parlo-primary)]"
@@ -484,10 +488,10 @@ export function PricingSection({
 
         {/* Category 03: Immersion Studio (Cohorts, Schools & Teams) */}
         <TiltCard3D
-          maxTilt={4.5}
-          magneticPull={4}
-          hoverScale={1.01}
-          glare={true}
+          maxTilt={4}
+          magneticPull={3}
+          hoverScale={1.008}
+          glare={false}
           className={`bg-[var(--parlo-surface)] rounded-2xl border flex flex-col overflow-hidden transition-colors shadow-sm hover:shadow-xl ${
             selectedPlan === "schools-teams"
               ? "border-[var(--parlo-primary)]"

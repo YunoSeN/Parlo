@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   ArrowRight,
   Compass,
@@ -33,12 +34,17 @@ interface CommandPaletteProps {
   activeLevel: CefrLevel;
   activeThemeId: ThemeId;
   isSessionActive: boolean;
+  chatOpen?: boolean;
+  soundPanelOpen?: boolean;
   scenarios: Scenario[];
   onNavigate: (view: AppView) => void;
   onSelectLanguage: (code: string) => void;
   onSelectLevel: (level: CefrLevel) => void;
   onSelectScenario: (scenario: Scenario) => void;
   onSelectTheme: (themeId: ThemeId) => void;
+  onToggleChat?: () => void;
+  onToggleSoundPanel?: () => void;
+  onOpenOnboarding?: () => void;
   onToggleSession: () => void;
 }
 
@@ -50,17 +56,23 @@ export function CommandPalette({
   activeLevel,
   activeThemeId,
   isSessionActive,
+  chatOpen = false,
+  soundPanelOpen = false,
   scenarios,
   onNavigate,
   onSelectLanguage,
   onSelectLevel,
   onSelectScenario,
   onSelectTheme,
+  onToggleChat,
+  onToggleSoundPanel,
+  onOpenOnboarding,
   onToggleSession,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [highlightIdx, setHighlightIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const prefersReducedMotion = useReducedMotion();
 
   useEffect(() => {
     if (open) {
@@ -82,6 +94,51 @@ export function CommandPalette({
         keywords: "mic voice talk speak start end session practice",
         onSelect: onToggleSession,
       },
+      ...(onToggleChat
+        ? [
+            {
+              id: "action-tutor-chat",
+              group: "Actions" as const,
+              label: chatOpen
+                ? "Close Gemini Tutor Chat"
+                : "Open Gemini Tutor Chat",
+              subtitle:
+                "Multi-turn partner, grammar coach, culture guide & phrase builder (⌘J)",
+              keywords: "chat tutor gemini ask grammar culture phrases partner",
+              onSelect: onToggleChat,
+            },
+          ]
+        : []),
+      ...(onToggleSoundPanel
+        ? [
+            {
+              id: "action-soundscapes",
+              group: "Actions" as const,
+              label: soundPanelOpen
+                ? "Close Soundscapes & SFX"
+                : "Open Soundscapes & SFX Mixer",
+              subtitle:
+                "Toggle rain, vinyl room, breeze, waves, hearth & UI SFX (⌘M)",
+              keywords:
+                "soundscape ambient rain vinyl waves hearth audio sfx mute sound",
+              onSelect: onToggleSoundPanel,
+            },
+          ]
+        : []),
+      ...(onOpenOnboarding
+        ? [
+            {
+              id: "action-onboarding",
+              group: "Actions" as const,
+              label: "Launch Guided Studio Onboarding",
+              subtitle:
+                "Calibrate language, CEFR level, voice persona, goal & opening scene",
+              keywords:
+                "onboarding setup guide welcome wizard calibrate start tutorial",
+              onSelect: onOpenOnboarding,
+            },
+          ]
+        : []),
       ...(["A2", "B1", "B2", "C1"] as CefrLevel[]).map((lvl) => ({
         id: `level-${lvl}`,
         group: "Actions" as const,
@@ -179,14 +236,18 @@ export function CommandPalette({
     activeLevel,
     activeThemeId,
     activeView,
+    chatOpen,
     isSessionActive,
     onNavigate,
     onSelectLanguage,
     onSelectLevel,
     onSelectScenario,
     onSelectTheme,
+    onToggleChat,
+    onToggleSoundPanel,
     onToggleSession,
     scenarios,
+    soundPanelOpen,
   ]);
 
   const filtered = useMemo(() => {
@@ -233,8 +294,6 @@ export function CommandPalette({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [filtered, highlightIdx, onClose, open]);
 
-  if (!open) return null;
-
   const getGroupIcon = (group: CommandItem["group"]) => {
     switch (group) {
       case "Actions":
@@ -251,16 +310,38 @@ export function CommandPalette({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh] px-4 bg-black/35"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Parlo Quick Command Palette"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="w-full max-w-xl bg-[var(--parlo-surface-solid)]/95 backdrop-blur-xl border border-[var(--parlo-border)] rounded-2xl shadow-2xl overflow-hidden">
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          key="parlo-command-backdrop"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+          className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh] px-4 bg-black/40 backdrop-blur-[3px]"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Parlo Quick Command Palette"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) onClose();
+          }}
+        >
+          <motion.div
+            key="parlo-command-panel"
+            initial={
+              prefersReducedMotion
+                ? { opacity: 0 }
+                : { opacity: 0, y: -14, scale: 0.96 }
+            }
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={
+              prefersReducedMotion
+                ? { opacity: 0 }
+                : { opacity: 0, y: -10, scale: 0.965 }
+            }
+            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+            className="w-full max-w-xl bg-[var(--parlo-surface-solid)]/96 backdrop-blur-2xl border border-[var(--parlo-border)] rounded-2xl shadow-2xl overflow-hidden"
+          >
         {/* Search Input */}
         <div className="flex items-center gap-3 px-4 py-3.5 border-b border-[var(--parlo-border)]">
           <Search
@@ -361,7 +442,9 @@ export function CommandPalette({
           <span>↑↓ Navigate · Enter Select</span>
           <span>Esc Close</span>
         </div>
-      </div>
-    </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }

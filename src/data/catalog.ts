@@ -1,4 +1,8 @@
 import { LanguageOption, Scenario, VoicePersona } from '../types';
+import madridCafeImg from '../assets/images/scenario_cafe_madrid_1795088840066.jpg';
+import tokyoCounterImg from '../assets/images/scenario_tokyo_counter_1795088841647.jpg';
+import parisBookshopImg from '../assets/images/scenario_paris_bookshop_1795088841684.jpg';
+import berlinStudioImg from '../assets/images/scenario_berlin_studio_1795088841576.jpg';
 
 export const LANGUAGES: LanguageOption[] = [
   {
@@ -89,7 +93,7 @@ export const SCENARIOS: Scenario[] = [
     partnerName: 'Mateo',
     partnerRole: 'Neighborhood Barista',
     defaultVoice: 'Puck',
-    imageUrl: '/src/assets/images/scenario_cafe_madrid_1795088840066.jpg',
+    imageUrl: madridCafeImg,
     fallbackGradient: 'from-slate-800 via-slate-700 to-slate-900',
     summary:
       'Order coffee with a custom milk preference, ask what came fresh out of the oven, and make brief morning small talk.',
@@ -129,7 +133,7 @@ export const SCENARIOS: Scenario[] = [
     partnerName: 'Kenji',
     partnerRole: 'Counter Chef & Owner',
     defaultVoice: 'Charon',
-    imageUrl: '/src/assets/images/scenario_tokyo_counter_1795088841647.jpg',
+    imageUrl: tokyoCounterImg,
     fallbackGradient: 'from-stone-800 via-slate-800 to-zinc-900',
     summary:
       'Take a seat at an intimate wooden dining counter, ask about seasonal dishes and ingredients, and talk about your evening.',
@@ -162,7 +166,7 @@ export const SCENARIOS: Scenario[] = [
     partnerName: 'Claire',
     partnerRole: 'Independent Bookseller',
     defaultVoice: 'Zephyr',
-    imageUrl: '/src/assets/images/scenario_paris_bookshop_1795088841684.jpg',
+    imageUrl: parisBookshopImg,
     fallbackGradient: 'from-slate-700 via-slate-800 to-slate-950',
     summary:
       'Describe a book or film you recently loved, debate themes with the bookseller, and pick out a gift for a friend.',
@@ -192,7 +196,7 @@ export const SCENARIOS: Scenario[] = [
     partnerName: 'Lukas',
     partnerRole: 'Lead Product Architect',
     defaultVoice: 'Fenrir',
-    imageUrl: '/src/assets/images/scenario_berlin_studio_1795088841576.jpg',
+    imageUrl: berlinStudioImg,
     fallbackGradient: 'from-slate-800 via-zinc-800 to-slate-950',
     summary:
       'Walk a colleague through a project milestone, negotiate a realistic timeline, and respond diplomatically to constructive feedback.',
@@ -222,7 +226,7 @@ export const SCENARIOS: Scenario[] = [
     partnerName: 'Sofia',
     partnerRole: 'Apartment Host',
     defaultVoice: 'Kore',
-    imageUrl: '/src/assets/images/scenario_paris_bookshop_1795088841684.jpg',
+    imageUrl: parisBookshopImg,
     fallbackGradient: 'from-slate-700 via-blue-950 to-slate-900',
     summary:
       'Tour a furnished apartment, clarify monthly utilities and transit links, and negotiate a flexible move-in date.',
@@ -251,7 +255,7 @@ export const SCENARIOS: Scenario[] = [
     partnerName: 'Elena',
     partnerRole: 'Conversation Partner',
     defaultVoice: 'Zephyr',
-    imageUrl: '/src/assets/images/scenario_berlin_studio_1795088841576.jpg',
+    imageUrl: berlinStudioImg,
     fallbackGradient: 'from-blue-950 via-slate-800 to-slate-950',
     summary:
       'Speak freely about your day, travel, books, work, or current ideas with a responsive partner who keeps the dialogue flowing naturally.',
