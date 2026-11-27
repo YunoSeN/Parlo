@@ -2,13 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   computeRms,
   createAudioContextSafe,
+  createMicCaptureNode,
   downsampleAndEncodePcm16,
   GaplessAudioPlayer,
+  MicCaptureHandle,
 } from "../lib/audio";
 import {
   CefrLevel,
   CorrectionStyle,
   LanguageOption,
+  MicMode,
   Scenario,
   SpeakingPace,
   TranscriptTurn,
@@ -30,13 +33,23 @@ export interface LiveSessionParams {
   scenario: Scenario;
   correctionStyle: CorrectionStyle;
   speakingPace: SpeakingPace;
+  micMode?: MicMode;
+  getAuthToken?: () => Promise<string | null>;
   onUserTurnFinalized?: (turn: TranscriptTurn, allTurns: TranscriptTurn[]) => void;
+  onUnexpectedDisconnect?: (payload: {
+    turns: TranscriptTurn[];
+    elapsedSeconds: number;
+    reason: string;
+  }) => void;
 }
+
+const MAX_WS_BUFFERED_BYTES = 64 * 1024;
 
 export function useLivePartner(params: LiveSessionParams) {
   const [connectionState, setConnectionState] =
     useState<LiveConnectionState>("idle");
   const [isMuted, setIsMuted] = useState(false);
+  const [isPttActive, setIsPttActive] = useState(false);
   const [isPartnerSpeaking, setIsPartnerSpeaking] = useState(false);
   const [micAvailable, setMicAvailable] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -48,29 +61,56 @@ export function useLivePartner(params: LiveSessionParams) {
   const playerRef = useRef<GaplessAudioPlayer | null>(null);
   const inputCtxRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const micCaptureRef = useRef<MicCaptureHandle | null>(null);
   const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const isMutedRef = useRef(false);
+  const micModeRef = useRef<MicMode>(params.micMode ?? "hands-free");
+  const isPttActiveRef = useRef(false);
   const isReadyRef = useRef(false);
+  const intentionalStopRef = useRef(false);
+  const recoveryEmittedRef = useRef(false);
   const userLevelRef = useRef(0);
   const partnerLevelRef = useRef(0);
   const turnsRef = useRef<TranscriptTurn[]>([]);
+  const elapsedSecondsRef = useRef(0);
   const activeUserTurnIdRef = useRef<string | null>(null);
   const activePartnerTurnIdRef = useRef<string | null>(null);
   const sessionSeqRef = useRef(0);
   const onUserTurnFinalizedRef = useRef(params.onUserTurnFinalized);
+  const onUnexpectedDisconnectRef = useRef(params.onUnexpectedDisconnect);
+  const getAuthTokenRef = useRef(params.getAuthToken);
 
   useEffect(() => {
     onUserTurnFinalizedRef.current = params.onUserTurnFinalized;
   }, [params.onUserTurnFinalized]);
 
   useEffect(() => {
+    onUnexpectedDisconnectRef.current = params.onUnexpectedDisconnect;
+  }, [params.onUnexpectedDisconnect]);
+
+  useEffect(() => {
+    getAuthTokenRef.current = params.getAuthToken;
+  }, [params.getAuthToken]);
+
+  useEffect(() => {
     turnsRef.current = turns;
   }, [turns]);
 
   useEffect(() => {
+    elapsedSecondsRef.current = elapsedSeconds;
+  }, [elapsedSeconds]);
+
+  useEffect(() => {
     isMutedRef.current = isMuted;
   }, [isMuted]);
+
+  useEffect(() => {
+    micModeRef.current = params.micMode ?? "hands-free";
+    if (micModeRef.current === "hands-free") {
+      isPttActiveRef.current = false;
+      setIsPttActive(false);
+    }
+  }, [params.micMode]);
 
   // Session duration timer
   useEffect(() => {
@@ -203,14 +243,13 @@ export function useLivePartner(params: LiveSessionParams) {
     sessionSeqRef.current += 1;
     isReadyRef.current = false;
 
-    if (processorRef.current) {
-      processorRef.current.onaudioprocess = null;
+    if (micCaptureRef.current) {
       try {
-        processorRef.current.disconnect();
+        micCaptureRef.current.disconnect();
       } catch {
         // ignore
       }
-      processorRef.current = null;
+      micCaptureRef.current = null;
     }
 
     if (sourceNodeRef.current) {
@@ -267,18 +306,36 @@ export function useLivePartner(params: LiveSessionParams) {
     finalizeActivePartnerTurn();
   }, [finalizeActivePartnerTurn, finalizeActiveUserTurn]);
 
+  const emitUnexpectedRecovery = useCallback((reason: string) => {
+    if (intentionalStopRef.current || recoveryEmittedRef.current) return;
+    recoveryEmittedRef.current = true;
+    const captured = turnsRef.current.filter((t) => t.text.trim().length > 0);
+    if (captured.length > 0) {
+      onUnexpectedDisconnectRef.current?.({
+        turns: captured,
+        elapsedSeconds: Math.max(1, elapsedSecondsRef.current),
+        reason,
+      });
+    }
+  }, []);
+
   const stopSession = useCallback(async () => {
+    intentionalStopRef.current = true;
     await teardownMediaAndSocket();
     setConnectionState("idle");
   }, [teardownMediaAndSocket]);
 
   const startSession = useCallback(async () => {
+    intentionalStopRef.current = true;
     await teardownMediaAndSocket();
+    intentionalStopRef.current = false;
+    recoveryEmittedRef.current = false;
     const currentSeq = sessionSeqRef.current;
 
     setErrorMessage(null);
     setConnectionState("connecting");
     setElapsedSeconds(0);
+    elapsedSecondsRef.current = 0;
     setIsMuted(false);
     isMutedRef.current = false;
     activeUserTurnIdRef.current = null;
@@ -328,6 +385,21 @@ export function useLivePartner(params: LiveSessionParams) {
       isMutedRef.current = true;
     }
 
+    // Fetch optional Firebase ID token before opening WebSocket (sent in encrypted WS payload, never URL)
+    let authToken: string | undefined;
+    if (getAuthTokenRef.current) {
+      try {
+        const token = await getAuthTokenRef.current();
+        if (token) authToken = token;
+      } catch {
+        // Proceed with guest preview quota
+      }
+    }
+
+    if (sessionSeqRef.current !== currentSeq) {
+      return;
+    }
+
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(`${protocol}//${window.location.host}/api/live`);
     wsRef.current = ws;
@@ -336,6 +408,7 @@ export function useLivePartner(params: LiveSessionParams) {
       ws.send(
         JSON.stringify({
           type: "start",
+          authToken,
           config: {
             languageName: params.language.name,
             languageNative: params.language.nativeName,
@@ -343,6 +416,7 @@ export function useLivePartner(params: LiveSessionParams) {
             dialectDirective: params.dialectDirective,
             level: params.level,
             voiceName: params.voiceName,
+            scenarioId: params.scenario.id,
             scenarioTitle: params.scenario.title,
             scenarioPrompt: params.scenario.promptContext,
             partnerName: params.scenario.partnerName,
@@ -378,47 +452,63 @@ export function useLivePartner(params: LiveSessionParams) {
           // Start capturing mic audio now that Gemini Live is ready
           const activeStream = mediaStreamRef.current ?? stream;
           if (activeStream) {
-            try {
-              const inputCtx = createAudioContextSafe(16000);
-              inputCtxRef.current = inputCtx;
-              if (inputCtx.state === "suspended") {
-                void inputCtx.resume().catch(() => {});
-              }
-              const source = inputCtx.createMediaStreamSource(activeStream);
-              sourceNodeRef.current = source;
-              const processor = inputCtx.createScriptProcessor(4096, 1, 1);
-              processorRef.current = processor;
-
-              processor.onaudioprocess = (audioEvent) => {
-                if (
-                  !isReadyRef.current ||
-                  isMutedRef.current ||
-                  ws.readyState !== WebSocket.OPEN
-                ) {
-                  userLevelRef.current *= 0.8;
+            void (async () => {
+              try {
+                const inputCtx = createAudioContextSafe(16000);
+                inputCtxRef.current = inputCtx;
+                if (inputCtx.state === "suspended") {
+                  await inputCtx.resume().catch(() => {});
+                }
+                if (sessionSeqRef.current !== currentSeq) {
+                  await inputCtx.close().catch(() => {});
                   return;
                 }
-                const channelData = audioEvent.inputBuffer.getChannelData(0);
-                userLevelRef.current = computeRms(channelData);
-                const base64 = downsampleAndEncodePcm16(
-                  channelData,
-                  inputCtx.sampleRate,
-                  16000
-                );
-                ws.send(JSON.stringify({ type: "audio", data: base64 }));
-              };
+                const source = inputCtx.createMediaStreamSource(activeStream);
+                sourceNodeRef.current = source;
 
-              source.connect(processor);
-              // Route through silent gain node so mic doesn't echo back to speakers
-              const silentGain = inputCtx.createGain();
-              silentGain.gain.value = 0;
-              processor.connect(silentGain);
-              silentGain.connect(inputCtx.destination);
-            } catch {
-              setMicAvailable(false);
-              setIsMuted(true);
-              isMutedRef.current = true;
-            }
+                const captureHandle = await createMicCaptureNode(
+                  inputCtx,
+                  source,
+                  (channelData) => {
+                    const pttBlocked =
+                      micModeRef.current === "push-to-talk" &&
+                      !isPttActiveRef.current;
+                    if (
+                      !isReadyRef.current ||
+                      isMutedRef.current ||
+                      pttBlocked ||
+                      ws.readyState !== WebSocket.OPEN
+                    ) {
+                      userLevelRef.current *= 0.8;
+                      return;
+                    }
+                    userLevelRef.current = computeRms(channelData);
+                    // Backpressure protection: drop frame if outbound buffer is saturated
+                    if (ws.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
+                      return;
+                    }
+                    const base64 = downsampleAndEncodePcm16(
+                      channelData,
+                      inputCtx.sampleRate,
+                      16000
+                    );
+                    ws.send(JSON.stringify({ type: "audio", data: base64 }));
+                  }
+                );
+
+                if (sessionSeqRef.current !== currentSeq) {
+                  captureHandle.disconnect();
+                  return;
+                }
+                micCaptureRef.current = captureHandle;
+              } catch {
+                if (sessionSeqRef.current === currentSeq) {
+                  setMicAvailable(false);
+                  setIsMuted(true);
+                  isMutedRef.current = true;
+                }
+              }
+            })();
           }
 
           // Prompt partner to greet the learner right away
@@ -456,36 +546,59 @@ export function useLivePartner(params: LiveSessionParams) {
       }
 
       if (msg.type === "error") {
-        setErrorMessage(
-          msg.message || "Unable to connect to the Gemini Live voice partner."
-        );
+        const reason =
+          msg.message || "Unable to connect to the live voice partner.";
+        setErrorMessage(reason);
         setConnectionState("error");
+        emitUnexpectedRecovery(reason);
         void teardownMediaAndSocket();
         return;
       }
 
       if (msg.type === "closed") {
-        setConnectionState((prev) => (prev === "error" ? "error" : "idle"));
+        if (!intentionalStopRef.current && isReadyRef.current) {
+          const reason =
+            msg.reason ||
+            "Voice connection closed unexpectedly. Your captured transcript was saved.";
+          setErrorMessage(reason);
+          setConnectionState("error");
+          emitUnexpectedRecovery(reason);
+          void teardownMediaAndSocket();
+        } else {
+          setConnectionState((prev) => (prev === "error" ? "error" : "idle"));
+        }
       }
     };
 
     ws.onerror = () => {
-      setErrorMessage(
-        "Voice WebSocket connection interrupted. Please try starting the session again."
-      );
+      if (wsRef.current !== ws) return;
+      const reason =
+        "Voice connection interrupted. Your captured transcript was preserved — click Reconnect to resume.";
+      setErrorMessage(reason);
       setConnectionState("error");
+      emitUnexpectedRecovery(reason);
       void teardownMediaAndSocket();
     };
 
     ws.onclose = () => {
       if (wsRef.current === ws) {
+        const wasLive = isReadyRef.current;
         isReadyRef.current = false;
+        if (!intentionalStopRef.current && wasLive) {
+          const reason =
+            "Voice connection dropped unexpectedly. Your transcript has been archived.";
+          setErrorMessage(reason);
+          setConnectionState("error");
+          emitUnexpectedRecovery(reason);
+        } else {
+          setConnectionState((prev) => (prev === "error" ? "error" : "idle"));
+        }
         void teardownMediaAndSocket();
-        setConnectionState((prev) => (prev === "error" ? "error" : "idle"));
       }
     };
   }, [
     appendTranscriptDelta,
+    emitUnexpectedRecovery,
     finalizeActivePartnerTurn,
     params.correctionStyle,
     params.dialectDirective,
@@ -497,6 +610,7 @@ export function useLivePartner(params: LiveSessionParams) {
     params.scenario.partnerName,
     params.scenario.partnerRole,
     params.scenario.promptContext,
+    params.scenario.id,
     params.scenario.title,
     params.speakingPace,
     params.voiceName,
@@ -509,6 +623,14 @@ export function useLivePartner(params: LiveSessionParams) {
       isMutedRef.current = next;
       return next;
     });
+  }, []);
+
+  const setPttActive = useCallback((active: boolean) => {
+    isPttActiveRef.current = active;
+    setIsPttActive(active);
+    if (active) {
+      playerRef.current?.interrupt();
+    }
   }, []);
 
   const sendTextTurn = useCallback(
@@ -542,6 +664,7 @@ export function useLivePartner(params: LiveSessionParams) {
     turnsRef.current = [];
     setTurns([]);
     setElapsedSeconds(0);
+    elapsedSecondsRef.current = 0;
     activeUserTurnIdRef.current = null;
     activePartnerTurnIdRef.current = null;
   }, []);
@@ -549,6 +672,7 @@ export function useLivePartner(params: LiveSessionParams) {
   // Clean up on unmount
   useEffect(() => {
     return () => {
+      intentionalStopRef.current = true;
       void teardownMediaAndSocket();
     };
   }, [teardownMediaAndSocket]);
@@ -556,6 +680,7 @@ export function useLivePartner(params: LiveSessionParams) {
   return {
     connectionState,
     isMuted,
+    isPttActive,
     isPartnerSpeaking,
     micAvailable,
     errorMessage,
@@ -567,8 +692,10 @@ export function useLivePartner(params: LiveSessionParams) {
     startSession,
     stopSession,
     toggleMute,
+    setPttActive,
     sendTextTurn,
     resetTranscript,
     clearError: () => setErrorMessage(null),
   };
 }
+

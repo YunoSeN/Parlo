@@ -1,13 +1,13 @@
 import { SrsCardState, SrsRating } from "../types";
+import { scopedKey } from "./accountStorage";
 
-const SRS_STORAGE_KEY = "parlo_srs_schedule_v1";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type SrsScheduleMap = Record<string, SrsCardState>;
 
-export function readSrsScheduleMap(): SrsScheduleMap {
+export function readSrsScheduleMap(scope = "guest"): SrsScheduleMap {
   try {
-    const raw = localStorage.getItem(SRS_STORAGE_KEY);
+    const raw = localStorage.getItem(scopedKey(scope, "srs"));
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === "object" ? (parsed as SrsScheduleMap) : {};
@@ -16,9 +16,12 @@ export function readSrsScheduleMap(): SrsScheduleMap {
   }
 }
 
-export function saveSrsScheduleMap(map: SrsScheduleMap): void {
+export function saveSrsScheduleMap(
+  map: SrsScheduleMap,
+  scope = "guest"
+): void {
   try {
-    localStorage.setItem(SRS_STORAGE_KEY, JSON.stringify(map));
+    localStorage.setItem(scopedKey(scope, "srs"), JSON.stringify(map));
   } catch {
     // ignore storage quota errors
   }

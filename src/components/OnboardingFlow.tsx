@@ -4,24 +4,14 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
-  CloudRain,
-  Disc3,
-  Flame,
   Mic,
-  Sparkles,
-  Volume2,
-  Waves,
-  Wind,
   X,
 } from "lucide-react";
-import {
-  CEFR_DESCRIPTIONS,
-  LANGUAGES,
-  VOICE_PERSONAS,
-} from "../data/catalog";
-import { SOUNDSCAPE_LAYERS, SoundscapeLayerId } from "../lib/ambientAudio";
+import { CEFR_DESCRIPTIONS, LANGUAGES } from "../data/catalog";
+import { SoundscapeLayerId } from "../lib/ambientAudio";
 import { getCultureByLanguage } from "../lib/cultures";
 import { sfxEngine } from "../lib/sfx";
+import { extractCefrShortLabel } from "../lib/textMetrics";
 import { CefrLevel, Scenario, SpeakingPace, VoiceName } from "../types";
 import { CulturalMotifArt } from "./CulturalMotifArt";
 import { LanguageFlagBadge } from "./LanguageFlagBadge";
@@ -31,46 +21,29 @@ export interface OnboardingFlowProps {
   open: boolean;
   languageCode: string;
   level: CefrLevel;
-  voiceName: VoiceName;
-  speakingPace: SpeakingPace;
-  weeklyGoal: number;
+  voiceName?: VoiceName;
+  speakingPace?: SpeakingPace;
+  weeklyGoal?: number;
   activeScenarioId: string;
   scenarios: Scenario[];
-  activeSoundLayers: SoundscapeLayerId[];
-  sfxEnabled: boolean;
+  activeSoundLayers?: SoundscapeLayerId[];
+  sfxEnabled?: boolean;
   onSelectLanguage: (code: string) => void;
   onSelectLevel: (level: CefrLevel) => void;
-  onSelectVoice: (voice: VoiceName) => void;
-  onChangeSpeakingPace: (pace: SpeakingPace) => void;
-  onChangeWeeklyGoal: (goal: number) => void;
+  onSelectVoice?: (voice: VoiceName) => void;
+  onChangeSpeakingPace?: (pace: SpeakingPace) => void;
+  onChangeWeeklyGoal?: (goal: number) => void;
   onSelectScenario: (scenario: Scenario) => void;
-  onToggleSoundLayer: (id: SoundscapeLayerId) => void;
-  onToggleSfx: () => void;
+  onToggleSoundLayer?: (id: SoundscapeLayerId) => void;
+  onToggleSfx?: () => void;
   onComplete: (launchVoice: boolean) => void;
   onSkip: () => void;
 }
 
 const STEPS = [
-  { id: 0, short: "Language", title: "Choose your language & atmosphere" },
-  { id: 1, short: "Voice", title: "Calibrate level & partner voice" },
-  { id: 2, short: "Rhythm", title: "Set weekly goal & soundscape" },
-  { id: 3, short: "Scene", title: "Pick your opening scene" },
+  { id: 0, short: "Language & Level", title: "What would you like to practice?" },
+  { id: 1, short: "Opening Scene", title: "Pick a real-world scene & start speaking" },
 ] as const;
-
-const WEEKLY_GOAL_PRESETS = [
-  { sessions: 2, label: "Casual", detail: "2 sessions / wk" },
-  { sessions: 4, label: "Steady", detail: "4 sessions / wk" },
-  { sessions: 5, label: "Focused", detail: "5 sessions / wk" },
-  { sessions: 7, label: "Daily", detail: "7 sessions / wk" },
-] as const;
-
-const LAYER_ICONS: Record<SoundscapeLayerId, typeof CloudRain> = {
-  "cafe-rain": CloudRain,
-  "evening-lounge": Disc3,
-  "morning-breeze": Wind,
-  "coastal-waves": Waves,
-  "library-hearth": Flame,
-};
 
 const EASE_SMOOTH = [0.16, 1, 0.3, 1] as const;
 
@@ -78,21 +51,11 @@ export function OnboardingFlow({
   open,
   languageCode,
   level,
-  voiceName,
-  speakingPace,
-  weeklyGoal,
   activeScenarioId,
   scenarios,
-  activeSoundLayers,
-  sfxEnabled,
   onSelectLanguage,
   onSelectLevel,
-  onSelectVoice,
-  onChangeSpeakingPace,
-  onChangeWeeklyGoal,
   onSelectScenario,
-  onToggleSoundLayer,
-  onToggleSfx,
   onComplete,
   onSkip,
 }: OnboardingFlowProps) {
@@ -161,7 +124,7 @@ export function OnboardingFlow({
             className="fixed inset-0 bg-black/58 backdrop-blur-md"
           />
 
-          {/* Responsive Dialog / Mobile Bottom Sheet */}
+          {/* Responsive 2-Step Dialog / Mobile Bottom Sheet */}
           <motion.div
             key="onboarding-card"
             initial={
@@ -176,9 +139,8 @@ export function OnboardingFlow({
                 : { opacity: 0, y: 24, scale: 0.97 }
             }
             transition={{ duration: 0.26, ease: EASE_SMOOTH }}
-            className="relative z-10 w-full sm:max-w-[660px] max-h-[92dvh] sm:max-h-[86dvh] flex flex-col rounded-t-[26px] sm:rounded-[24px] border border-[var(--parlo-border)] bg-[var(--parlo-surface-solid)]/98 backdrop-blur-2xl shadow-[0_30px_90px_-18px_rgba(0,0,0,0.65)] overflow-hidden"
+            className="relative z-10 w-full sm:max-w-[640px] max-h-[92dvh] sm:max-h-[86dvh] flex flex-col rounded-t-[26px] sm:rounded-[24px] border border-[var(--parlo-border)] bg-[var(--parlo-surface-solid)]/98 backdrop-blur-2xl shadow-[0_30px_90px_-18px_rgba(0,0,0,0.65)] overflow-hidden"
           >
-            {/* Cultural top accent bar */}
             <div
               aria-hidden="true"
               className="h-[2.5px] w-full shrink-0"
@@ -188,7 +150,6 @@ export function OnboardingFlow({
               }}
             />
 
-            {/* Mobile sheet grab handle */}
             <div className="sm:hidden pt-2.5 pb-1 flex justify-center shrink-0">
               <span
                 aria-hidden="true"
@@ -196,12 +157,12 @@ export function OnboardingFlow({
               />
             </div>
 
-            {/* Header + Stepper */}
+            {/* Header + 2-Step Progress */}
             <div className="px-5 sm:px-6 pt-3 sm:pt-5 pb-4 border-b border-[var(--parlo-border)] shrink-0">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2 text-[11px] font-mono text-[var(--parlo-primary)]">
-                    <span>Guided Studio Setup</span>
+                  <div className="flex items-center gap-2 text-xs font-mono text-[var(--parlo-primary)]">
+                    <span>Quick Start</span>
                     <span aria-hidden="true" className="text-[var(--parlo-ink-muted)]">
                       ·
                     </span>
@@ -220,18 +181,17 @@ export function OnboardingFlow({
                 <button
                   type="button"
                   onClick={onSkip}
-                  aria-label="Skip guided onboarding"
-                  className="min-w-[40px] min-h-[40px] inline-flex items-center justify-center rounded-xl text-[var(--parlo-ink-muted)] hover:text-[var(--parlo-ink)] hover:bg-[var(--parlo-surface-alt)] transition-colors cursor-pointer shrink-0"
+                  aria-label="Skip quick setup"
+                  className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded-xl text-[var(--parlo-ink-muted)] hover:text-[var(--parlo-ink)] hover:bg-[var(--parlo-surface-alt)] transition-colors cursor-pointer shrink-0"
                 >
                   <X className="w-4 h-4" aria-hidden="true" />
                 </button>
               </div>
 
-              {/* Interactive Step Progress Segments */}
               <div
-                className="mt-4 grid grid-cols-4 gap-2"
+                className="mt-3.5 grid grid-cols-2 gap-2.5"
                 role="tablist"
-                aria-label="Onboarding steps"
+                aria-label="Quick setup steps"
               >
                 {STEPS.map((item, idx) => {
                   const isActive = idx === step;
@@ -257,7 +217,7 @@ export function OnboardingFlow({
                         />
                       </div>
                       <span
-                        className={`mt-1.5 block text-[11px] font-medium truncate transition-colors ${
+                        className={`mt-1.5 block text-xs font-medium truncate transition-colors ${
                           isActive
                             ? "text-[var(--parlo-ink)]"
                             : "text-[var(--parlo-ink-muted)] group-hover:text-[var(--parlo-ink-secondary)]"
@@ -289,9 +249,9 @@ export function OnboardingFlow({
                   }
                   transition={{ duration: 0.2, ease: EASE_SMOOTH }}
                 >
-                  {/* STEP 1: LANGUAGE & CULTURAL ATMOSPHERE */}
+                  {/* STEP 1: LANGUAGE + CEFR LEVEL */}
                   {step === 0 && (
-                    <div className="space-y-4">
+                    <div className="space-y-5">
                       <div className="flex items-center gap-3.5 p-3.5 rounded-2xl border border-[var(--parlo-border)] bg-[var(--parlo-surface-alt)]">
                         <CulturalMotifArt
                           languageCode={languageCode}
@@ -326,7 +286,7 @@ export function OnboardingFlow({
                               role="radio"
                               aria-checked={selected}
                               onClick={() => onSelectLanguage(lang.code)}
-                              className={`min-h-[64px] p-3 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+                              className={`min-h-[60px] p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
                                 selected
                                   ? "bg-[var(--parlo-primary-soft)] border-[var(--parlo-primary)] text-[var(--parlo-ink)] shadow-sm"
                                   : "bg-[var(--parlo-surface)] border-[var(--parlo-border)] text-[var(--parlo-ink-secondary)] hover:border-[var(--parlo-ink-muted)]"
@@ -340,7 +300,7 @@ export function OnboardingFlow({
                                     aria-hidden="true"
                                   />
                                 ) : (
-                                  <span className="font-mono text-[10px] uppercase text-[var(--parlo-ink-muted)]">
+                                  <span className="font-mono text-[11px] uppercase text-[var(--parlo-ink-muted)]">
                                     {lang.code}
                                   </span>
                                 )}
@@ -349,7 +309,7 @@ export function OnboardingFlow({
                                 <p className="text-xs font-semibold text-[var(--parlo-ink)] truncate">
                                   {lang.nativeName}
                                 </p>
-                                <p className="text-[10px] text-[var(--parlo-ink-muted)] truncate">
+                                <p className="text-[11px] text-[var(--parlo-ink-muted)] truncate">
                                   {cult.cityLine.split("&")[0].trim()}
                                 </p>
                               </div>
@@ -357,18 +317,13 @@ export function OnboardingFlow({
                           );
                         })}
                       </div>
-                    </div>
-                  )}
 
-                  {/* STEP 2: CEFR LEVEL, VOICE & PACE */}
-                  {step === 1 && (
-                    <div className="space-y-5">
                       <div>
                         <p className="text-xs font-semibold text-[var(--parlo-ink)] mb-2">
                           Proficiency Level (CEFR)
                         </p>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          {(["A2", "B1", "B2", "C1"] as CefrLevel[]).map((lvl) => {
+                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                          {(["A1", "A2", "B1", "B2", "C1"] as CefrLevel[]).map((lvl) => {
                             const selected = level === lvl;
                             return (
                               <button
@@ -378,97 +333,26 @@ export function OnboardingFlow({
                                   sfxEngine.playToggle(true);
                                   onSelectLevel(lvl);
                                 }}
-                                className={`min-h-[56px] p-3 rounded-xl border text-left transition-colors cursor-pointer flex items-center justify-between gap-3 ${
+                                title={CEFR_DESCRIPTIONS[lvl]}
+                                className={`min-h-[56px] p-2.5 rounded-xl border text-left transition-colors cursor-pointer ${
                                   selected
                                     ? "bg-[var(--parlo-primary-soft)] border-[var(--parlo-primary)]"
                                     : "bg-[var(--parlo-surface)] border-[var(--parlo-border)] hover:border-[var(--parlo-ink-muted)]"
                                 }`}
                               >
-                                <div className="min-w-0">
+                                <div className="flex items-center justify-between">
                                   <span className="font-mono text-xs font-bold text-[var(--parlo-primary)]">
                                     {lvl}
                                   </span>
-                                  <p className="text-xs text-[var(--parlo-ink-secondary)] mt-0.5 leading-snug">
-                                    {CEFR_DESCRIPTIONS[lvl]}
-                                  </p>
+                                  {selected && (
+                                    <Check
+                                      className="w-3.5 h-3.5 text-[var(--parlo-primary)]"
+                                      aria-hidden="true"
+                                    />
+                                  )}
                                 </div>
-                                {selected && (
-                                  <Check
-                                    className="w-4 h-4 text-[var(--parlo-primary)] shrink-0"
-                                    aria-hidden="true"
-                                  />
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <div>
-                        <p className="text-xs font-semibold text-[var(--parlo-ink)] mb-2">
-                          Partner Voice Persona
-                        </p>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                          {VOICE_PERSONAS.map((vp) => {
-                            const selected = voiceName === vp.id;
-                            return (
-                              <button
-                                key={vp.id}
-                                type="button"
-                                onClick={() => {
-                                  sfxEngine.playNav();
-                                  onSelectVoice(vp.id);
-                                }}
-                                className={`min-h-[52px] px-3 py-2.5 rounded-xl border text-left transition-colors cursor-pointer ${
-                                  selected
-                                    ? "bg-[var(--parlo-primary-soft)] border-[var(--parlo-primary)] text-[var(--parlo-ink)]"
-                                    : "bg-[var(--parlo-surface)] border-[var(--parlo-border)] text-[var(--parlo-ink-secondary)] hover:border-[var(--parlo-ink-muted)]"
-                                }`}
-                              >
-                                <p className="text-xs font-semibold text-[var(--parlo-ink)]">
-                                  {vp.label}
-                                </p>
-                                <p className="text-[11px] text-[var(--parlo-ink-muted)] truncate">
-                                  {vp.tone}
-                                </p>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <div>
-                        <p className="text-xs font-semibold text-[var(--parlo-ink)] mb-2">
-                          Speaking Pace
-                        </p>
-                        <div className="grid grid-cols-3 gap-2">
-                          {(
-                            [
-                              { id: "slow", label: "Slow", note: "Clear pauses" },
-                              { id: "natural", label: "Natural", note: "Everyday rhythm" },
-                              { id: "brisk", label: "Brisk", note: "Native speed" },
-                            ] as const
-                          ).map((item) => {
-                            const selected = speakingPace === item.id;
-                            return (
-                              <button
-                                key={item.id}
-                                type="button"
-                                onClick={() => {
-                                  sfxEngine.playToggle(true);
-                                  onChangeSpeakingPace(item.id);
-                                }}
-                                className={`min-h-[52px] px-3 py-2 rounded-xl border text-left transition-colors cursor-pointer ${
-                                  selected
-                                    ? "bg-[var(--parlo-primary-soft)] border-[var(--parlo-primary)]"
-                                    : "bg-[var(--parlo-surface)] border-[var(--parlo-border)] hover:border-[var(--parlo-ink-muted)]"
-                                }`}
-                              >
-                                <p className="text-xs font-semibold text-[var(--parlo-ink)]">
-                                  {item.label}
-                                </p>
-                                <p className="text-[11px] text-[var(--parlo-ink-muted)]">
-                                  {item.note}
+                                <p className="text-[11px] text-[var(--parlo-ink-secondary)] mt-1 leading-snug">
+                                  {extractCefrShortLabel(CEFR_DESCRIPTIONS[lvl])}
                                 </p>
                               </button>
                             );
@@ -478,142 +362,15 @@ export function OnboardingFlow({
                     </div>
                   )}
 
-                  {/* STEP 3: WEEKLY RHYTHM & SOUNDSCAPE */}
-                  {step === 2 && (
-                    <div className="space-y-5">
-                      <div>
-                        <p className="text-xs font-semibold text-[var(--parlo-ink)] mb-2">
-                          Weekly Speaking Goal
-                        </p>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                          {WEEKLY_GOAL_PRESETS.map((preset) => {
-                            const selected = weeklyGoal === preset.sessions;
-                            return (
-                              <button
-                                key={preset.sessions}
-                                type="button"
-                                onClick={() => {
-                                  sfxEngine.playSavePhrase();
-                                  onChangeWeeklyGoal(preset.sessions);
-                                }}
-                                className={`min-h-[60px] p-3 rounded-xl border text-left transition-colors cursor-pointer ${
-                                  selected
-                                    ? "bg-[var(--parlo-primary-soft)] border-[var(--parlo-primary)]"
-                                    : "bg-[var(--parlo-surface)] border-[var(--parlo-border)] hover:border-[var(--parlo-ink-muted)]"
-                                }`}
-                              >
-                                <p className="text-xs font-semibold text-[var(--parlo-ink)]">
-                                  {preset.label}
-                                </p>
-                                <p className="mt-0.5 font-mono text-[11px] text-[var(--parlo-ink-muted)] tabular-nums">
-                                  {preset.detail}
-                                </p>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <div>
-                        <div className="flex items-center justify-between gap-2 mb-2">
-                          <p className="text-xs font-semibold text-[var(--parlo-ink)]">
-                            Optional Background Soundscape
-                          </p>
-                          <span className="text-[11px] text-[var(--parlo-ink-muted)]">
-                            Tap to preview live
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          {SOUNDSCAPE_LAYERS.slice(0, 4).map((layer) => {
-                            const active = activeSoundLayers.includes(layer.id);
-                            const Icon = LAYER_ICONS[layer.id];
-                            return (
-                              <button
-                                key={layer.id}
-                                type="button"
-                                role="switch"
-                                aria-checked={active}
-                                onClick={() => onToggleSoundLayer(layer.id)}
-                                className={`min-h-[52px] px-3 py-2.5 rounded-xl border text-left transition-colors cursor-pointer flex items-center justify-between gap-2.5 ${
-                                  active
-                                    ? "bg-[var(--parlo-primary-soft)] border-[var(--parlo-primary)]"
-                                    : "bg-[var(--parlo-surface)] border-[var(--parlo-border)] hover:border-[var(--parlo-ink-muted)]"
-                                }`}
-                              >
-                                <div className="flex items-center gap-2.5 min-w-0">
-                                  <Icon
-                                    className={`w-4 h-4 shrink-0 ${
-                                      active
-                                        ? "text-[var(--parlo-primary)]"
-                                        : "text-[var(--parlo-ink-muted)]"
-                                    }`}
-                                    aria-hidden="true"
-                                  />
-                                  <div className="min-w-0">
-                                    <p className="text-xs font-semibold text-[var(--parlo-ink)] truncate">
-                                      {layer.label}
-                                    </p>
-                                    <p className="text-[10px] text-[var(--parlo-ink-muted)] truncate">
-                                      {layer.tagline}
-                                    </p>
-                                  </div>
-                                </div>
-                                <span
-                                  className={`font-mono text-[10px] font-semibold shrink-0 ${
-                                    active
-                                      ? "text-[var(--parlo-primary)]"
-                                      : "text-[var(--parlo-ink-muted)]"
-                                  }`}
-                                >
-                                  {active ? "ON" : "OFF"}
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between gap-3 p-3.5 rounded-xl border border-[var(--parlo-border)] bg-[var(--parlo-surface)]">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <Volume2
-                            className="w-4 h-4 text-[var(--parlo-primary)] shrink-0"
-                            aria-hidden="true"
-                          />
-                          <div className="min-w-0">
-                            <p className="text-xs font-semibold text-[var(--parlo-ink)]">
-                              Tactile UI Sound Effects
-                            </p>
-                            <p className="text-[11px] text-[var(--parlo-ink-muted)]">
-                              Subtle chimes for switching cultures, saving phrases & toggles
-                            </p>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={sfxEnabled}
-                          onClick={onToggleSfx}
-                          className={`min-h-[36px] px-3 rounded-lg border text-xs font-mono font-semibold transition-colors cursor-pointer shrink-0 ${
-                            sfxEnabled
-                              ? "bg-[var(--parlo-primary-soft)] border-[var(--parlo-primary)] text-[var(--parlo-primary)]"
-                              : "bg-[var(--parlo-canvas)] border-[var(--parlo-border)] text-[var(--parlo-ink-muted)]"
-                          }`}
-                        >
-                          {sfxEnabled ? "ON" : "OFF"}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* STEP 4: PICK OPENING SCENE */}
-                  {step === 3 && (
+                  {/* STEP 2: PICK OPENING SCENE & SPEAK */}
+                  {step === 1 && (
                     <div className="space-y-4">
-                      <p className="text-xs text-[var(--parlo-ink-secondary)] leading-relaxed">
-                        Choose a real-world conversation to begin in{" "}
+                      <p className="text-sm text-[var(--parlo-ink-secondary)] leading-relaxed">
+                        Choose your first real-world scene in{" "}
                         <span className="font-semibold text-[var(--parlo-ink)]">
                           {activeLanguage.name} ({level})
                         </span>
-                        . You can switch scenarios or enter the 3D Stage anytime.
+                        . Dialect, voice persona, pace, and ambient soundscapes are available anytime inside Practice Settings.
                       </p>
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -663,7 +420,7 @@ export function OnboardingFlow({
               </AnimatePresence>
             </div>
 
-            {/* Sticky Bottom Navigation Bar */}
+            {/* Sticky Bottom Bar */}
             <div className="px-5 sm:px-6 py-3.5 pb-[max(0.875rem,env(safe-area-inset-bottom))] border-t border-[var(--parlo-border)] bg-[var(--parlo-surface-alt)]/90 flex items-center justify-between gap-3 shrink-0">
               {step === 0 ? (
                 <button
@@ -684,13 +441,13 @@ export function OnboardingFlow({
                 </button>
               )}
 
-              {step < STEPS.length - 1 ? (
+              {step === 0 ? (
                 <button
                   type="button"
-                  onClick={() => goToStep(step + 1)}
+                  onClick={() => goToStep(1)}
                   className="min-h-[44px] inline-flex items-center gap-2 px-5 rounded-xl bg-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-hover)] text-[var(--parlo-on-solid)] text-xs font-semibold transition-colors cursor-pointer shadow-sm"
                 >
-                  Continue
+                  Choose Scene
                   <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
                 </button>
               ) : (
@@ -708,7 +465,6 @@ export function OnboardingFlow({
                     className="min-h-[44px] inline-flex items-center gap-1.5 px-4 rounded-xl bg-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-hover)] text-[var(--parlo-on-solid)] text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shadow-sm"
                   >
                     <Mic className="w-3.5 h-3.5" aria-hidden="true" />
-                    <Sparkles className="w-3 h-3 hidden sm:inline" aria-hidden="true" />
                     Start Speaking
                   </button>
                 </div>

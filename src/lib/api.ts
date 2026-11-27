@@ -6,15 +6,43 @@ import {
   WordLookupResult,
 } from "../types";
 
+type TokenProvider = () => Promise<string | null>;
+
+let apiTokenProvider: TokenProvider | null = null;
+
+export function setApiTokenProvider(provider: TokenProvider | null): void {
+  apiTokenProvider = provider;
+}
+
 async function postJson<T>(url: string, body: unknown): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (apiTokenProvider) {
+    try {
+      const token = await apiTokenProvider();
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+    } catch {
+      // Fall back to guest quota cleanly
+    }
+  }
+
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.error || `Request failed (${res.status})`);
+    throw new Error(
+      typeof data.error === "string" && data.error.trim()
+        ? data.error
+        : res.status === 429
+        ? "Too many requests right now. Please wait a moment and try again."
+        : `Request failed (${res.status})`
+    );
   }
   return data as T;
 }
@@ -24,6 +52,7 @@ export async function fetchTurnFeedback(params: {
   utterance: string;
   languageName: string;
   dialectLabel?: string;
+  dialectDirective?: string;
   level: string;
   scenarioTitle: string;
   recentTurns: { role: string; text: string }[];
@@ -63,6 +92,7 @@ export async function fetchTurnTranslation(params: {
 export async function fetchReplyHints(params: {
   languageName: string;
   dialectLabel?: string;
+  dialectDirective?: string;
   level: string;
   scenarioTitle: string;
   scenarioPrompt: string;

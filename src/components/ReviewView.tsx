@@ -3,8 +3,9 @@ import { BookmarkPlus, CheckCircle2, Loader2, RefreshCw } from "lucide-react";
 import { getLanguageByCode } from "../data/catalog";
 import { fetchSessionDebrief } from "../lib/api";
 import { CountryFontSpec, getCultureByLanguage } from "../lib/cultures";
+import { isSrsCardDue, readSrsScheduleMap } from "../lib/srs";
 import { computeDailyStreak } from "../lib/streaks";
-import { DebriefReport, PracticeSessionRecord } from "../types";
+import { DebriefReport, PracticeSessionRecord, SavedPhrase } from "../types";
 import { CulturalMotifArt } from "./CulturalMotifArt";
 import { DailyStreakCard } from "./DailyStreakCard";
 import { EditorialTextReveal } from "./EditorialTextReveal";
@@ -15,6 +16,8 @@ import { WeeklyGoalsWidget } from "./WeeklyGoalsWidget";
 
 interface ReviewViewProps {
   sessions: PracticeSessionRecord[];
+  savedPhrases?: SavedPhrase[];
+  storageScope?: string;
   weeklyGoal: number;
   activeLanguageCode?: string;
   categoryFont?: CountryFontSpec;
@@ -39,6 +42,8 @@ function formatDuration(seconds: number): string {
 
 export function ReviewView({
   sessions,
+  savedPhrases = [],
+  storageScope = "guest",
   weeklyGoal,
   activeLanguageCode = "es",
   categoryFont,
@@ -64,12 +69,26 @@ export function ReviewView({
     const totalSeconds = sessions.reduce((sum, s) => sum + s.durationSeconds, 0);
     const totalTurns = sessions.reduce((sum, s) => sum + s.userTurnsCount, 0);
     const totalMinutes = Math.round(totalSeconds / 60);
+    const goalsDone = sessions.reduce((sum, s) => sum + s.goalsCompleted, 0);
+    const goalsTotal = sessions.reduce((sum, s) => sum + s.goalsTotal, 0);
+    const goalRate =
+      goalsTotal > 0 ? Math.round((goalsDone / goalsTotal) * 100) : 0;
+
+    const srsMap = readSrsScheduleMap(storageScope);
+    const masteredPhrases = savedPhrases.filter((p) => p.mastered).length;
+    const duePhrases = savedPhrases.filter((p) => isSrsCardDue(srsMap[p.id])).length;
+
     return {
       streakDays: streak.currentStreak,
       totalMinutes,
       totalTurns,
+      goalsDone,
+      goalsTotal,
+      goalRate,
+      masteredPhrases,
+      duePhrases,
     };
-  }, [sessions]);
+  }, [savedPhrases, sessions, storageScope]);
 
   const handleGenerateDebrief = async (session: PracticeSessionRecord) => {
     setLoadingId(session.id);
@@ -158,8 +177,8 @@ export function ReviewView({
           </GlowCtaButton>
         </div>
 
-        {/* Decimal-Indexed Real Activity Plate */}
-        <div className="relative z-10 grid grid-cols-1 sm:grid-cols-3 border-t border-[var(--parlo-border)] bg-[var(--parlo-surface-alt)]/80 divide-y sm:divide-y-0 sm:divide-x divide-[var(--parlo-border)]">
+        {/* Decimal-Indexed Real Learning Progress Plate */}
+        <div className="relative z-10 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 border-t border-[var(--parlo-border)] bg-[var(--parlo-surface-alt)]/80 divide-y sm:divide-y-0 sm:divide-x divide-[var(--parlo-border)]">
           <div className="px-6 py-4">
             <p className="text-xs font-mono text-[var(--parlo-ink-muted)]">
               01. Active Streak
@@ -173,23 +192,36 @@ export function ReviewView({
           </div>
           <div className="px-6 py-4">
             <p className="text-xs font-mono text-[var(--parlo-ink-muted)]">
-              02. Total Spoken Time
+              02. Scenario Goals
             </p>
             <p className="mt-1 font-mono text-2xl font-semibold text-[var(--parlo-ink)] tabular-nums">
-              {summaryStats.totalMinutes}{" "}
+              {summaryStats.goalsTotal > 0 ? `${summaryStats.goalRate}%` : "—"}{" "}
               <span className="text-xs font-normal text-[var(--parlo-ink-muted)]">
-                min logged
+                {summaryStats.goalsDone}/{summaryStats.goalsTotal} reached
               </span>
             </p>
           </div>
           <div className="px-6 py-4">
             <p className="text-xs font-mono text-[var(--parlo-ink-muted)]">
-              03. Spoken Turns
+              03. Words Retained
+            </p>
+            <p className="mt-1 font-mono text-2xl font-semibold text-[var(--parlo-ink)] tabular-nums">
+              {summaryStats.masteredPhrases}/{savedPhrases.length}{" "}
+              <span className="text-xs font-normal text-[var(--parlo-ink-muted)]">
+                {summaryStats.duePhrases > 0
+                  ? `${summaryStats.duePhrases} due`
+                  : "mastered"}
+              </span>
+            </p>
+          </div>
+          <div className="px-6 py-4">
+            <p className="text-xs font-mono text-[var(--parlo-ink-muted)]">
+              04. Spoken Output
             </p>
             <p className="mt-1 font-mono text-2xl font-semibold text-[var(--parlo-ink)] tabular-nums">
               {summaryStats.totalTurns}{" "}
               <span className="text-xs font-normal text-[var(--parlo-ink-muted)]">
-                across {sessions.length} {sessions.length === 1 ? "session" : "sessions"}
+                turns · {summaryStats.totalMinutes} min
               </span>
             </p>
           </div>

@@ -140,6 +140,131 @@ const SCENARIO_ARTIFACTS: Record<string, RoleplayArtifact> = {
       },
     ],
   },
+  "seoul-cafe": {
+    id: "artifact-seoul-cafe",
+    scenarioIds: ["seoul-cafe"],
+    kind: "menu",
+    headerKicker: "성수 바이닐 카페 · 오늘의 메뉴 & LP",
+    title: "Seongsu Pour-Over & Vinyl Shelf",
+    subtitle: "Order drinks and ask Minji about the records spinning today.",
+    footerNote: "디카페인·오트밀크 변경 가능 · 신청곡은 카운터에 편하게 말씀해 주세요.",
+    items: [
+      {
+        id: "seoul-handdrip",
+        title: "에티오피아 예가체프 핸드드립",
+        reading: "Etiopia Yegachepeu Haendeudeurip",
+        detail: "Floral jasmine aroma with bright citrus notes · Hot or Iced",
+        meta: "₩6,500",
+        speakPrompt: "안녕하세요, 에티오피아 핸드드립 아이스로 한 잔 부탁드려요.",
+      },
+      {
+        id: "seoul-yuja-ade",
+        title: "고흥 수제 유자 에이드",
+        reading: "Goheung Suje Yuja Eideu",
+        detail: "Sparkling house-made citron ade with fresh rosemary sprig",
+        meta: "₩6,000",
+        speakPrompt: "수제 유자 에이드는 많이 달지 않나요?",
+      },
+      {
+        id: "seoul-financier",
+        title: "솔티드 버터 휘낭시에",
+        reading: "Soltideu Beoteo Hwinangsie",
+        detail: "Warm crisp-edged brown butter financier baked at 3 PM",
+        meta: "₩3,800",
+        speakPrompt: "방금 구운 휘낭시에 하나도 같이 주문할게요.",
+      },
+      {
+        id: "seoul-lp-pick",
+        title: "오늘의 추천 LP · 90년대 시티팝 & 인디",
+        reading: "Oneurui Chucheon LP",
+        detail: "Ask Minji about the artist currently spinning on the tube amp",
+        meta: "Now Playing",
+        speakPrompt: "지금 틀어 주신 LP 분위기가 너무 좋은데, 어떤 가수 앨범이에요?",
+      },
+    ],
+  },
+  "taipei-teahouse": {
+    id: "artifact-taipei-teahouse",
+    scenarioIds: ["taipei-teahouse"],
+    kind: "menu",
+    headerKicker: "大稻埕茶室 · 今日茶單",
+    title: "Dadaocheng Seasonal Tea List",
+    subtitle: "Explore oolong aromas and tea snacks at Wei-Lin's counter.",
+    footerNote: "每壺可回沖三至四次 · 歡迎告知偏好的茶湯濃淡。",
+    items: [
+      {
+        id: "alishan-oolong",
+        title: "阿里山高山金萱烏龍",
+        reading: "Ālǐshān Gāoshān Jīnxuān Wūlóng",
+        detail: "High-mountain oolong with creamy floral fragrance and clean sweet finish",
+        meta: "NT$240",
+        speakPrompt: "我想试试阿里山金萱乌龙，喝起来会不会很清爽？",
+      },
+      {
+        id: "muzha-tieguanyin",
+        title: "木柵炭焙鐵觀音",
+        reading: "Mùzhà Tànbèi Tiěguānyīn",
+        detail: "Slow charcoal-roasted oolong with warm nutty caramel notes",
+        meta: "NT$260",
+        speakPrompt: "如果喜欢焙火香气重一点的，推荐木栅铁观音吗？",
+      },
+      {
+        id: "mungbean-cake",
+        title: "手工桂花綠豆糕",
+        reading: "Shǒugōng Guìhuā Lǜdòugāo",
+        detail: "Melt-in-the-mouth osmanthus mung bean tea pastries (3 pieces)",
+        meta: "NT$120",
+        speakPrompt: "可以再来一份桂花绿豆糕配茶吗？",
+      },
+      {
+        id: "pineapple-cake",
+        title: "微酸土鳳梨酥",
+        reading: "Wēisuān Tǔ Fènglísū",
+        detail: "Warm flaky butter pastry filled with tangy native pineapple jam",
+        meta: "NT$110",
+        speakPrompt: "这个土凤梨酥甜度高吗？我想点一个尝尝。",
+      },
+    ],
+  },
+  "lisbon-bakery": {
+    id: "artifact-lisbon-bakery",
+    scenarioIds: ["lisbon-bakery"],
+    kind: "menu",
+    headerKicker: "Padaria da Esquina · Fornada da Manhã",
+    title: "Warm Oven & Espresso Counter",
+    subtitle: "Order fresh pastries and coffee with Rafael like a morning regular.",
+    footerNote: "Leite de aveia disponível · Fornadas quentes a cada 30 minutos.",
+    items: [
+      {
+        id: "pastel-nata",
+        title: "Pastel de nata recém-saído do forno",
+        detail: "Massa folhada estaladiça com creme morno e canela opcional",
+        meta: "€1.40",
+        speakPrompt: "Bom dia! Esse pastel de nata acabou de sair do forno? Quero um com canela.",
+      },
+      {
+        id: "pao-queijo",
+        title: "Pão de queijo mineiro quentinho",
+        detail: "Crosta dourada e miolo macio com queijo curado da Serra",
+        meta: "€2.20",
+        speakPrompt: "Me vê dois pães de queijo quentinhos, por favor?",
+      },
+      {
+        id: "cafe-pingado",
+        title: "Café pingado / Galão cremoso",
+        detail: "Expresso aromático com um toque de leite ou leite de aveia",
+        meta: "€2.10",
+        speakPrompt: "Para beber, queria um café pingado com leite de aveia, por favor.",
+      },
+      {
+        id: "suco-laranja",
+        title: "Sumo de laranja natural na hora",
+        detail: "Laranjas doces espremidas no momento · sem gelo ou com gelo",
+        meta: "€3.20",
+        speakPrompt: "O sumo de laranja é natural? Pode ser sem gelo, por favor.",
+      },
+    ],
+  },
   "berlin-studio": {
     id: "artifact-berlin-studio",
     scenarioIds: ["berlin-studio"],
@@ -214,52 +339,22 @@ export function getRoleplayArtifact(
   const exact = SCENARIO_ARTIFACTS[scenarioId];
   if (exact) return exact;
 
-  // Fallback by active language for custom/open scenarios
+  // Fallback by active language for custom/open scenarios across ALL 8 languages
   const langFallbackMap: Record<string, string> = {
     es: "madrid-cafe",
     ja: "tokyo-counter",
     fr: "paris-bookshop",
     de: "berlin-studio",
     it: "milan-apartment",
+    ko: "seoul-cafe",
+    zh: "taipei-teahouse",
+    pt: "lisbon-bakery",
   };
-  const fallbackKey = langFallbackMap[languageCode];
-  if (fallbackKey && SCENARIO_ARTIFACTS[fallbackKey]) {
-    return {
-      ...SCENARIO_ARTIFACTS[fallbackKey],
-      subtitle: `Local cultural reference card adapted for “${scenarioTitle}”.`,
-    };
-  }
-
+  const fallbackKey = langFallbackMap[languageCode] ?? "madrid-cafe";
+  const fallback = SCENARIO_ARTIFACTS[fallbackKey];
   return {
-    id: `artifact-generic-${languageCode}`,
-    scenarioIds: [scenarioId],
-    kind: "guide",
-    headerKicker: "Parlo Field Card · Conversation Anchors",
-    title: scenarioTitle,
-    subtitle: "Use these concrete conversation pivots to keep dialogue flowing naturally.",
-    footerNote: "Tap any prompt to hear it aloud or prefill your live response.",
-    items: [
-      {
-        id: "anchor-1",
-        title: "Ask for a local recommendation",
-        detail: "Invite your partner to share their favorite personal choice",
-        meta: "Opening",
-        speakPrompt: "What would you personally recommend here if it were your first visit?",
-      },
-      {
-        id: "anchor-2",
-        title: "Share a preference & follow up",
-        detail: "Compare two options and explain what matters most to you",
-        meta: "Deepen",
-        speakPrompt: "I usually prefer something calm and local—how does this compare?",
-      },
-      {
-        id: "anchor-3",
-        title: "Close warmly like a regular",
-        detail: "Thank your partner and mention returning soon",
-        meta: "Closing",
-        speakPrompt: "Thank you so much for your help—I will definitely come back soon.",
-      },
-    ],
+    ...fallback,
+    id: `artifact-${fallbackKey}-${scenarioId}`,
+    subtitle: `Local cultural reference card adapted for “${scenarioTitle}”.`,
   };
 }

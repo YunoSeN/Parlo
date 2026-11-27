@@ -6,14 +6,13 @@ import {
   useMotionValue,
   useReducedMotion,
 } from "motion/react";
-import { Box, Compass, Mic, PhoneOff, Volume2 } from "lucide-react";
+import { Box, Compass, PhoneOff, Volume2 } from "lucide-react";
 import { LANGUAGES } from "../data/catalog";
 import { speakWithBrowserTts } from "../lib/audio";
 import { CountryFontSpec, getCultureByLanguage } from "../lib/cultures";
 import { CefrLevel, LanguageOption, Scenario } from "../types";
 import { CulturalMotifArt } from "./CulturalMotifArt";
 import { EditorialTextReveal } from "./EditorialTextReveal";
-import { GlowCtaButton } from "./GlowCtaButton";
 import { GlowingEdgeCard } from "./GlowingEdgeCard";
 import { LanguageFlagBadge } from "./LanguageFlagBadge";
 import { RolodexWord } from "./RolodexWord";
@@ -26,7 +25,7 @@ interface StudioLandingHeroProps {
   isConnecting: boolean;
   categoryFont?: CountryFontSpec;
   onSelectLanguage: (code: string) => void;
-  onStartSession: () => void;
+  onStartSession?: () => void;
   onEndSession: () => void;
   onOpenScenarios: () => void;
   onOpenSpatial: () => void;
@@ -40,7 +39,6 @@ export function StudioLandingHero({
   isConnecting,
   categoryFont,
   onSelectLanguage,
-  onStartSession,
   onEndSession,
   onOpenScenarios,
   onOpenSpatial,
@@ -99,7 +97,7 @@ export function StudioLandingHero({
             whileHover={{ y: -1.5 }}
             whileTap={{ scale: 0.96 }}
             onClick={onEndSession}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-sans font-medium text-[var(--parlo-on-solid)] bg-[var(--parlo-ink)] hover:bg-[var(--parlo-primary)] rounded-lg transition-colors cursor-pointer"
+            className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-sans font-medium text-[var(--parlo-on-solid)] bg-[var(--parlo-ink)] hover:bg-[var(--parlo-primary)] rounded-lg transition-colors cursor-pointer"
           >
             <PhoneOff className="w-3.5 h-3.5" aria-hidden="true" />
             End Session
@@ -112,15 +110,15 @@ export function StudioLandingHero({
   return (
     <section
       aria-label="Parlo Voice Studio introduction"
-      className="relative mb-6 pb-6 border-b border-[var(--parlo-border)] grid grid-cols-1 lg:grid-cols-12 gap-6 items-center"
+      className="relative mb-5 pb-5 border-b border-[var(--parlo-border)] grid grid-cols-1 lg:grid-cols-12 gap-5 items-center"
     >
-      {/* Left: Masked Editorial Display Statement & Tactile Controls */}
-      <div className="lg:col-span-7 space-y-4">
+      {/* Left: Masked Editorial Display Statement & Cultural Context */}
+      <div className="lg:col-span-7 space-y-3.5">
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
-          className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] font-tech uppercase tracking-[0.2em] text-[var(--parlo-ink-muted)]"
+          className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] font-tech uppercase tracking-[0.18em] text-[var(--parlo-ink-muted)]"
         >
           <LanguageFlagBadge code={language.code} size="xs" />
           <span className="text-[var(--parlo-primary)] font-semibold">
@@ -139,7 +137,7 @@ export function StudioLandingHero({
         </motion.div>
 
         <h1
-          className="text-[34px] sm:text-5xl lg:text-[60px] font-normal tracking-[-0.03em] text-[var(--parlo-ink)] leading-[1.06] sm:leading-[1.03] [text-wrap:balance]"
+          className="text-[32px] sm:text-[42px] lg:text-[50px] font-normal tracking-[-0.03em] text-[var(--parlo-ink)] leading-[1.06] sm:leading-[1.04] [text-wrap:balance]"
           style={
             categoryFont
               ? {
@@ -155,27 +153,10 @@ export function StudioLandingHero({
             words={LANGUAGES.map((l) => `${l.name}.`)}
             className="italic font-medium text-[var(--parlo-primary)]"
           />
-          <span className="block mt-2 sm:mt-2.5 font-sans not-italic text-base sm:text-xl font-normal text-[var(--parlo-ink-muted)] tracking-[-0.01em] leading-snug">
-            Real voice, real rhythm, zero rehearsal friction.
+          <span className="block mt-1.5 font-sans not-italic text-sm sm:text-lg font-normal text-[var(--parlo-ink-muted)] tracking-[-0.01em] leading-snug">
+            Real voice, real rhythm, live written phrasing notes.
           </span>
         </h1>
-
-        <motion.p
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.38, delay: 0.14, ease: [0.16, 1, 0.3, 1] }}
-          className="text-sm sm:text-[15px] text-[var(--parlo-ink-secondary)] max-w-xl leading-relaxed"
-        >
-          Step into{" "}
-          <span className="font-semibold text-[var(--parlo-ink)]">
-            {scenario.title}
-          </span>{" "}
-          with {scenario.partnerName} in {scenario.city} — calibrated to CEFR{" "}
-          <span className="font-mono text-xs font-medium text-[var(--parlo-primary)]">
-            {level}
-          </span>{" "}
-          with live written phrasing notes.
-        </motion.p>
 
         {/* Authentic Cultural Proverb & Native Cadence Immersion Ribbon */}
         <AnimatePresence mode="wait">
@@ -194,7 +175,7 @@ export function StudioLandingHero({
               >
                 “{culture.culturalProverb}”
               </p>
-              <p className="mt-0.5 text-[11px] text-[var(--parlo-ink-muted)] truncate">
+              <p className="mt-0.5 text-xs text-[var(--parlo-ink-muted)] truncate">
                 {culture.culturalProverbMeaning} · {culture.cityLine}
               </p>
             </div>
@@ -207,7 +188,7 @@ export function StudioLandingHero({
                 )
               }
               title={`Hear ${language.name} proverb`}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[var(--parlo-border)] bg-[var(--parlo-canvas)]/80 hover:border-[var(--parlo-primary)] text-[11px] font-medium text-[var(--parlo-ink-secondary)] hover:text-[var(--parlo-primary)] transition-colors shrink-0 cursor-pointer"
+              className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--parlo-border)] bg-[var(--parlo-canvas)]/80 hover:border-[var(--parlo-primary)] text-xs font-medium text-[var(--parlo-ink-secondary)] hover:text-[var(--parlo-primary)] transition-colors shrink-0 cursor-pointer"
             >
               <Volume2 className="w-3.5 h-3.5 text-[var(--parlo-primary)]" aria-hidden="true" />
               <span className="hidden sm:inline">Hear</span>
@@ -215,49 +196,41 @@ export function StudioLandingHero({
           </motion.div>
         </AnimatePresence>
 
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.38, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
-          className="pt-1 flex flex-wrap items-center gap-3"
-        >
-          <GlowCtaButton
-            onClick={onStartSession}
-            leadingIcon={<Mic className="w-4 h-4" aria-hidden="true" />}
-          >
-            Start Voice Session
-          </GlowCtaButton>
-
-          <motion.button
+        {/* Quiet Secondary Context Actions (Primary Start Speaking CTA lives in the Acoustic Stage below) */}
+        <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--parlo-ink-secondary)]">
+          <span>
+            Ready in{" "}
+            <strong className="font-semibold text-[var(--parlo-ink)]">
+              {scenario.title}
+            </strong>{" "}
+            with {scenario.partnerName} ({level})
+          </span>
+          <span className="text-[var(--parlo-border)]" aria-hidden="true">
+            ·
+          </span>
+          <button
             type="button"
-            whileHover={{ y: -2, scale: 1.01 }}
-            whileTap={{ scaleX: 1.02, scaleY: 0.95 }}
-            transition={{ type: "spring", stiffness: 480, damping: 24 }}
             onClick={onOpenScenarios}
-            className="parlo-surface-elevated inline-flex items-center gap-1.5 px-4 py-3 text-sm font-medium text-[var(--parlo-ink)] bg-[var(--parlo-surface)] border border-[var(--parlo-border)] hover:border-[var(--parlo-ink)] rounded-xl transition-colors whitespace-nowrap cursor-pointer"
+            className="inline-flex items-center gap-1.5 font-medium text-[var(--parlo-primary)] hover:underline underline-offset-4 cursor-pointer whitespace-nowrap"
           >
-            <Compass
-              className="w-4 h-4 text-[var(--parlo-ink-muted)]"
-              aria-hidden="true"
-            />
+            <Compass className="w-3.5 h-3.5" aria-hidden="true" />
             Change Scenario
-          </motion.button>
-
-          <motion.button
+          </button>
+          <span className="text-[var(--parlo-border)]" aria-hidden="true">
+            ·
+          </span>
+          <button
             type="button"
-            whileHover={{ y: -1.5, x: 1 }}
-            whileTap={{ scale: 0.96 }}
-            transition={{ type: "spring", stiffness: 460, damping: 24 }}
             onClick={onOpenSpatial}
-            className="inline-flex items-center gap-1.5 px-3.5 py-3 text-sm font-medium text-[var(--parlo-ink-muted)] hover:text-[var(--parlo-ink)] transition-colors whitespace-nowrap cursor-pointer group"
+            className="inline-flex items-center gap-1.5 font-medium text-[var(--parlo-ink-secondary)] hover:text-[var(--parlo-ink)] cursor-pointer whitespace-nowrap group"
           >
             <Box
-              className="w-4 h-4 text-[var(--parlo-primary)] transition-transform duration-300 group-hover:rotate-12 group-hover:scale-110"
+              className="w-3.5 h-3.5 text-[var(--parlo-primary)] transition-transform duration-300 group-hover:rotate-12"
               aria-hidden="true"
             />
-            3D Stage
-          </motion.button>
-        </motion.div>
+            3D Rooms
+          </button>
+        </div>
       </div>
 
       {/* Right: Animated Cultural Medallion + Tactile 8-Language Selector Card */}

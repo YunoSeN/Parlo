@@ -11,7 +11,7 @@ import {
 import { fetchWordLookup } from "../lib/api";
 import { speakWithBrowserTts } from "../lib/audio";
 import { playClickSfx, playSuccessSfx } from "../lib/sfx";
-import { LanguageOption, WordLookupResult } from "../types";
+import { CefrLevel, LanguageOption, WordLookupResult } from "../types";
 
 export interface SelectedWordAnchor {
   word: string;
@@ -34,7 +34,7 @@ interface TextSegment {
  * short 2-3 character tap targets (or natural script boundaries) so learners
  * can click any word in Spanish, French, Japanese, Chinese, Korean, etc.
  */
-function tokenizeTranscript(text: string): TextSegment[] {
+export function tokenizeTranscript(text: string): TextSegment[] {
   const segments: TextSegment[] = [];
   // Match CJK ideographs / kana runs, Latin/Cyrillic/Hangul words with apostrophes/hyphens, or punctuation/spaces
   const regex =
@@ -121,6 +121,7 @@ export function ClickableTranscriptText({
 interface WordDictionaryPopoverProps {
   anchor: SelectedWordAnchor | null;
   language: LanguageOption;
+  level?: CefrLevel;
   dialectLabel?: string;
   scenarioTitle: string;
   savedPhraseStrings: Set<string>;
@@ -138,6 +139,7 @@ interface WordDictionaryPopoverProps {
 export function WordDictionaryPopover({
   anchor,
   language,
+  level = "B1",
   dialectLabel,
   scenarioTitle,
   savedPhraseStrings,
@@ -160,10 +162,10 @@ export function WordDictionaryPopover({
 
     fetchWordLookup({
       word: anchor.word,
-      sentence: anchor.sentence,
+      sentenceContext: anchor.sentence,
       languageName: language.name,
-      languageCode: language.code,
       dialectLabel,
+      level,
     })
       .then((data) => {
         if (!cancelled) {
@@ -185,7 +187,7 @@ export function WordDictionaryPopover({
     return () => {
       cancelled = true;
     };
-  }, [anchor, dialectLabel, language.code, language.name, retrySeed]);
+  }, [anchor, dialectLabel, language.name, level, retrySeed]);
 
   // Dismiss on Esc or click outside
   useEffect(() => {
@@ -302,7 +304,7 @@ export function WordDictionaryPopover({
 
             {!loading && error && (
               <div className="space-y-2 py-1">
-                <p className="text-[var(--parlo-danger)]">{error}</p>
+                <p className="text-red-500">{error}</p>
                 <button
                   type="button"
                   onClick={() => setRetrySeed((n) => n + 1)}

@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   AlertCircle,
-  ArrowUpRight,
   BookmarkCheck,
   BookmarkPlus,
   BookOpen,
   Check,
   CheckCircle2,
+  ChevronDown,
   CloudRain,
+  Compass,
   Disc3,
   Flame,
   Headphones,
@@ -18,6 +19,7 @@ import {
   Mic,
   MicOff,
   PhoneOff,
+  RotateCcw,
   SlidersHorizontal,
   Sparkles,
   Volume2,
@@ -31,11 +33,14 @@ import { DailyCulturalMission } from "../lib/dailyMission";
 import { RegionalDialectOption } from "../lib/dialects";
 import { getRoleplayArtifact } from "../lib/roleplayArtifacts";
 import { sfxEngine } from "../lib/sfx";
+import { countSpokenUnits } from "../lib/textMetrics";
 import {
   CefrLevel,
   CoachFeedback,
   CorrectionStyle,
   LanguageOption,
+  MicMode,
+  PracticeSessionRecord,
   ReplySuggestion,
   Scenario,
   SpeakingPace,
@@ -50,6 +55,7 @@ import { RadiantPromptInput } from "./RadiantPromptInput";
 import { RoleplayArtifactSheet } from "./RoleplayArtifactSheet";
 import { ScenarioImage } from "./ScenarioImage";
 import { StudioLandingHero } from "./StudioLandingHero";
+import { StudioPostSessionSummary } from "./StudioPostSessionSummary";
 import { StudioTunerBar } from "./StudioTunerBar";
 import { TiltCard3D } from "./TiltCard3D";
 import { WarmupCardDeck } from "./WarmupCardDeck";
@@ -84,6 +90,10 @@ interface StudioViewProps {
   // Live session props
   connectionState: LiveConnectionState;
   isMuted: boolean;
+  micMode?: MicMode;
+  onChangeMicMode?: (mode: MicMode) => void;
+  isPttActive?: boolean;
+  onPttActiveChange?: (active: boolean) => void;
   isPartnerSpeaking: boolean;
   micAvailable: boolean;
   errorMessage: string | null;
@@ -116,7 +126,10 @@ interface StudioViewProps {
     scenarioTitle: string;
     note?: string;
   }) => void;
-  lastArchivedSessionId: string | null;
+  lastArchivedSessionId?: string | null;
+  lastArchivedSession?: PracticeSessionRecord | null;
+  wasLastSessionRecovered?: boolean;
+  onDismissSummary?: () => void;
   onOpenReview: () => void;
 
   // Regional dialect & Daily Cultural Mission props
@@ -147,9 +160,7 @@ export function StudioView({
   voiceName,
   onSelectVoice,
   scenario,
-  allScenarios = [],
   categoryFont,
-  onSelectScenario,
   onOpenScenarios,
   onOpenSpatial,
   correctionStyle,
@@ -160,6 +171,10 @@ export function StudioView({
   onToggleAutoCoach,
   connectionState,
   isMuted,
+  micMode = "hands-free",
+  onChangeMicMode,
+  isPttActive = false,
+  onPttActiveChange,
   isPartnerSpeaking,
   micAvailable,
   errorMessage,
@@ -183,7 +198,9 @@ export function StudioView({
   onToggleGoal,
   savedPhraseStrings,
   onSavePhrase,
-  lastArchivedSessionId,
+  lastArchivedSession = null,
+  wasLastSessionRecovered = false,
+  onDismissSummary,
   onOpenReview,
   dialects = [],
   activeDialectId,
@@ -198,6 +215,7 @@ export function StudioView({
   const [deckTab, setDeckTab] = useState<DeckTab>("coach");
   const [typedInput, setTypedInput] = useState("");
   const [showArtifact, setShowArtifact] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedWordAnchor, setSelectedWordAnchor] =
     useState<SelectedWordAnchor | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
@@ -216,18 +234,28 @@ export function StudioView({
     transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [turns.length, turns[turns.length - 1]?.text]);
 
-  // Live broadcast desk keyboard shortcuts: M = mute/unmute, H = reply hints
+  // Live broadcast desk keyboard shortcuts: M = mute/unmute, H = reply hints, Space = Hold-to-Talk
   useEffect(() => {
     if (!isLive) return;
+    const isTextField = (target: EventTarget | null) =>
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement;
+
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || isTextField(e.target)) {
+        return;
+      }
       if (
-        e.metaKey ||
-        e.ctrlKey ||
-        e.altKey ||
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement ||
-        e.target instanceof HTMLSelectElement
+        e.code === "Space" &&
+        micMode === "push-to-talk" &&
+        micAvailable &&
+        !isMuted
       ) {
+        e.preventDefault();
+        if (!e.repeat) {
+          onPttActiveChange?.(true);
+        }
         return;
       }
       const key = e.key.toLowerCase();
@@ -240,21 +268,41 @@ export function StudioView({
         onRequestHints();
       }
     };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "Space" && micMode === "push-to-talk") {
+        onPttActiveChange?.(false);
+      }
+    };
+
+    const onBlur = () => {
+      if (micMode === "push-to-talk") {
+        onPttActiveChange?.(false);
+      }
+    };
+
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isLive, loadingHints, micAvailable, onRequestHints, onToggleMute]);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [
+    isLive,
+    isMuted,
+    loadingHints,
+    micAvailable,
+    micMode,
+    onPttActiveChange,
+    onRequestHints,
+    onToggleMute,
+  ]);
 
   const userWordsSpoken = turns
     .filter((t) => t.role === "user")
-    .reduce(
-      (sum, t) =>
-        sum +
-        t.text
-          .trim()
-          .split(/\s+/)
-          .filter(Boolean).length,
-      0
-    );
+    .reduce((sum, t) => sum + countSpokenUnits(t.text, language.code), 0);
   const goalProgressPct =
     scenario.goals.length > 0
       ? Math.round((completedGoals.length / scenario.goals.length) * 100)
@@ -286,6 +334,13 @@ export function StudioView({
   } else if (isLive && isMuted) {
     statusText = micAvailable ? "Microphone muted" : "Text reply mode (mic unavailable)";
     statusColorClass = "text-amber-700";
+  } else if (isLive && micMode === "push-to-talk") {
+    statusText = isPttActive
+      ? "Hold-to-Talk active — speak now"
+      : "Hold button or Space to speak";
+    statusColorClass = isPttActive
+      ? "text-emerald-600 dark:text-emerald-400"
+      : "text-[var(--parlo-ink-secondary)]";
   } else if (isLive) {
     statusText = "Listening — speak naturally";
     statusColorClass = "text-emerald-700";
@@ -313,19 +368,106 @@ export function StudioView({
         onOpenSpatial={onOpenSpatial}
       />
 
-      {/* Tactile Braun-Inspired Studio Tuner Console */}
-      <StudioTunerBar
-        level={level}
-        onSelectLevel={onSelectLevel}
-        voiceName={voiceName}
-        onSelectVoice={onSelectVoice}
-        speakingPace={speakingPace}
-        onChangeSpeakingPace={onChangeSpeakingPace}
-        dialects={dialects}
-        activeDialectId={activeDialectId}
-        onSelectDialect={onSelectDialect}
-        disabled={isLive || isConnecting}
-      />
+      {/* Collapsible Practice Settings Summary Bar (Progressive Disclosure) */}
+      <div className="rounded-xl border border-[var(--parlo-border)] bg-[var(--parlo-surface)]/85 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-[var(--parlo-ink-secondary)]">
+          <span className="font-mono text-[11px] uppercase tracking-wider text-[var(--parlo-ink-muted)]">
+            Session setup
+          </span>
+          <span aria-hidden="true" className="text-[var(--parlo-border)]">
+            ·
+          </span>
+          <span className="font-mono font-semibold text-[var(--parlo-primary)]">
+            CEFR {level}
+          </span>
+          {activeDialect && (
+            <>
+              <span aria-hidden="true" className="text-[var(--parlo-border)]">
+                ·
+              </span>
+              <span>{activeDialect.label}</span>
+            </>
+          )}
+          <span aria-hidden="true" className="text-[var(--parlo-border)]">
+            ·
+          </span>
+          <span>Voice: {voiceName}</span>
+          <span aria-hidden="true" className="text-[var(--parlo-border)]">
+            ·
+          </span>
+          <span className="capitalize">Pace: {speakingPace}</span>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => {
+            sfxEngine.playToggle(!settingsOpen);
+            setSettingsOpen((prev) => !prev);
+          }}
+          aria-expanded={settingsOpen}
+          className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-[var(--parlo-border)] bg-[var(--parlo-canvas)]/75 hover:border-[var(--parlo-primary)] text-[var(--parlo-ink)] transition-colors cursor-pointer whitespace-nowrap"
+        >
+          <SlidersHorizontal className="w-3.5 h-3.5 text-[var(--parlo-primary)]" aria-hidden="true" />
+          <span>{settingsOpen ? "Hide Settings" : "Practice Settings"}</span>
+          <ChevronDown
+            className={`w-3.5 h-3.5 text-[var(--parlo-ink-muted)] transition-transform duration-200 ${
+              settingsOpen ? "rotate-180" : ""
+            }`}
+            aria-hidden="true"
+          />
+        </button>
+      </div>
+
+      <AnimatePresence initial={false}>
+        {settingsOpen && (
+          <motion.div
+            key="studio-tuner-panel"
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+            className="mt-3"
+          >
+            <StudioTunerBar
+              level={level}
+              onSelectLevel={onSelectLevel}
+              voiceName={voiceName}
+              onSelectVoice={onSelectVoice}
+              speakingPace={speakingPace}
+              onChangeSpeakingPace={onChangeSpeakingPace}
+              dialects={dialects}
+              activeDialectId={activeDialectId}
+              onSelectDialect={onSelectDialect}
+              disabled={isLive || isConnecting}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Post-Session Summary Card (shown immediately after finishing or recovering an interrupted session) */}
+      <AnimatePresence initial={false}>
+        {lastArchivedSession && !isLive && !isConnecting && (
+          <motion.div
+            key={`post-summary-${lastArchivedSession.id}`}
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+          >
+            <StudioPostSessionSummary
+              session={lastArchivedSession}
+              coachNotes={coachNotes}
+              language={language}
+              wasRecovered={wasLastSessionRecovered}
+              savedPhraseStrings={savedPhraseStrings}
+              onSavePhrase={onSavePhrase}
+              onOpenReview={onOpenReview}
+              onPracticeAgain={onStartSession}
+              onDismiss={() => onDismissSummary?.()}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Daily 3-Minute Cultural Mission Strip */}
       {!isLive && !isConnecting && dailyMission && onStartDailyMission && (
@@ -340,118 +482,8 @@ export function StudioView({
         </div>
       )}
 
-      {/* Magnetic 3D Parallax Scenario Quick-Deck (tilts smoothly toward pointer on hover) */}
-      {!isLive && !isConnecting && allScenarios.length > 0 && onSelectScenario && (
-        <section
-          aria-label="Featured scenarios"
-          className="mt-6"
-        >
-          <div className="flex items-baseline justify-between gap-4 mb-3">
-            <div className="flex items-baseline gap-2.5">
-              <span className="font-mono text-xs text-[var(--parlo-accent)]">
-                01.
-              </span>
-              <h2 className="font-display text-base font-semibold text-[var(--parlo-ink)]">
-                Scene Deck
-              </h2>
-              <span className="hidden sm:inline text-xs text-[var(--parlo-ink-muted)]">
-                Hover for magnetic parallax · click any scene to load immediately
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={onOpenScenarios}
-              className="inline-flex items-center gap-1 text-xs font-medium text-[var(--parlo-primary)] hover:underline underline-offset-4 cursor-pointer whitespace-nowrap"
-            >
-              All {allScenarios.length} scenes
-              <ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {[
-              ...allScenarios.filter(
-                (s) => s.id === scenario.id || s.defaultLanguageCode === language.code
-              ),
-              ...allScenarios.filter(
-                (s) => s.id !== scenario.id && s.defaultLanguageCode !== language.code
-              ),
-            ]
-              .filter(
-                (s, idx, arr) => arr.findIndex((x) => x.id === s.id) === idx
-              )
-              .slice(0, 3)
-              .map((card) => {
-                const isActive = card.id === scenario.id;
-                return (
-                  <TiltCard3D
-                    key={card.id}
-                    maxTilt={7.5}
-                    magneticPull={7}
-                    hoverScale={1.018}
-                    glare={false}
-                    className={`group rounded-2xl border overflow-hidden transition-colors ${
-                      isActive
-                        ? "bg-[var(--parlo-surface)] border-[var(--parlo-primary)] ring-1 ring-[var(--parlo-primary)]/25"
-                        : "bg-[var(--parlo-surface)] border-[var(--parlo-border)] hover:border-[var(--parlo-primary)]/65"
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => onSelectScenario(card)}
-                      className="relative w-full h-full text-left p-4 flex items-center gap-3.5 cursor-pointer"
-                    >
-                      <div
-                        aria-hidden="true"
-                        data-culture={card.defaultLanguageCode}
-                        className="parlo-motif-overlay parlo-motif-card-subtle"
-                      />
-                      <div
-                        className="relative z-10 w-16 h-16 rounded-xl overflow-hidden shrink-0 border border-[var(--parlo-border)]"
-                        style={{ transform: "translateZ(14px)" }}
-                      >
-                        <ScenarioImage
-                          src={card.imageUrl}
-                          alt={card.title}
-                          title={card.title}
-                          fallbackGradient={card.fallbackGradient}
-                          className="w-full h-full transition-transform duration-300 group-hover:scale-105"
-                        />
-                      </div>
-                      <div
-                        className="relative z-10 min-w-0 flex-1"
-                        style={{ transform: "translateZ(10px)" }}
-                      >
-                        <div className="flex items-center gap-1.5 text-[11px] font-mono text-[var(--parlo-ink-muted)]">
-                          <span className="truncate">{card.city}</span>
-                          <span aria-hidden="true">·</span>
-                          <span>{card.recommendedLevel}</span>
-                          {isActive && (
-                            <>
-                              <span aria-hidden="true">·</span>
-                              <span className="text-[var(--parlo-primary)] font-semibold">
-                                Active
-                              </span>
-                            </>
-                          )}
-                        </div>
-                        <p className="mt-0.5 font-display text-sm font-semibold text-[var(--parlo-ink)] truncate">
-                          {card.title}
-                        </p>
-                        <p className="mt-0.5 text-xs text-[var(--parlo-ink-muted)] truncate">
-                          with {card.partnerName} · {card.partnerRole}
-                        </p>
-                      </div>
-                    </button>
-                  </TiltCard3D>
-                );
-              })}
-          </div>
-        </section>
-      )}
-
       {/* Main Two-Zone Sandbox Split */}
-      <div className="mt-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <div className="mt-5 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* LEFT ZONE (66%): Voice Stage + Live Synchronized Transcript */}
         <section
           aria-label="Live conversation stage"
@@ -501,9 +533,21 @@ export function StudioView({
                     {formatTimer(elapsedSeconds)}
                   </span>
                 </div>
-                <h2 className="mt-1 font-display text-2xl sm:text-[26px] font-bold text-[var(--parlo-ink)] leading-tight [text-wrap:balance]">
-                  {scenario.title}
-                </h2>
+                <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="font-display text-2xl sm:text-[26px] font-bold text-[var(--parlo-ink)] leading-tight [text-wrap:balance]">
+                    {scenario.title}
+                  </h2>
+                  {!isLive && !isConnecting && (
+                    <button
+                      type="button"
+                      onClick={onOpenScenarios}
+                      className="inline-flex items-center gap-1 text-xs font-medium text-[var(--parlo-primary)] hover:underline underline-offset-4 cursor-pointer whitespace-nowrap"
+                    >
+                      <Compass className="w-3.5 h-3.5" aria-hidden="true" />
+                      Switch scene
+                    </button>
+                  )}
+                </div>
                 <p className="mt-1.5 text-sm text-[var(--parlo-ink-secondary)] leading-relaxed">
                   {scenario.summary}
                 </p>
@@ -578,46 +622,35 @@ export function StudioView({
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: -6, scale: 0.985 }}
                   transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-                  className="mt-3 p-3.5 bg-red-500/10 border border-red-500/35 rounded-lg flex items-start justify-between gap-3"
+                  role="alert"
+                  className="mt-3 p-3.5 bg-red-500/10 border border-red-500/35 rounded-xl flex flex-wrap items-center justify-between gap-3"
                 >
-                  <div className="flex items-start gap-2 text-sm text-red-400">
+                  <div className="flex items-start gap-2 text-sm text-red-500 dark:text-red-400">
                     <AlertCircle
-                      className="w-4 h-4 shrink-0 mt-0.5 text-red-400"
+                      className="w-4 h-4 shrink-0 mt-0.5 text-red-500 dark:text-red-400"
                       aria-hidden="true"
                     />
                     <span>{errorMessage}</span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={onClearError}
-                    className="text-xs font-medium text-red-300 hover:text-red-200 shrink-0 cursor-pointer"
-                  >
-                    Dismiss
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            <AnimatePresence initial={false}>
-              {lastArchivedSessionId && !isLive && !isConnecting && (
-                <motion.div
-                  key="studio-archived-banner"
-                  initial={{ opacity: 0, y: -6, scale: 0.985 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -6, scale: 0.985 }}
-                  transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-                  className="mt-3 p-3.5 bg-[var(--parlo-surface-solid)] border border-[var(--parlo-border)] rounded-lg flex flex-wrap items-center justify-between gap-3"
-                >
-                  <span className="text-xs text-[var(--parlo-ink-secondary)]">
-                    Your last conversation was saved to Session Review.
-                  </span>
-                  <button
-                    type="button"
-                    onClick={onOpenReview}
-                    className="text-xs font-medium text-[var(--parlo-primary)] hover:underline underline-offset-4 cursor-pointer"
-                  >
-                    Open Coaching Debrief
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {connectionState === "error" && (
+                      <button
+                        type="button"
+                        onClick={onStartSession}
+                        className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-[var(--parlo-on-solid)] bg-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-hover)] rounded-lg transition-colors cursor-pointer"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                        Reconnect
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={onClearError}
+                      className="min-h-[34px] px-2 text-xs font-medium text-red-500 dark:text-red-300 hover:underline cursor-pointer"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -644,6 +677,28 @@ export function StudioView({
                   </button>
                 )}
 
+                {isLive && micMode === "push-to-talk" && micAvailable && !isMuted && (
+                  <button
+                    type="button"
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      onPttActiveChange?.(true);
+                    }}
+                    onPointerUp={() => onPttActiveChange?.(false)}
+                    onPointerLeave={() => onPttActiveChange?.(false)}
+                    onPointerCancel={() => onPttActiveChange?.(false)}
+                    aria-pressed={isPttActive}
+                    className={`select-none touch-none inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-lg border transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                      isPttActive
+                        ? "bg-[var(--parlo-primary)] border-[var(--parlo-primary)] text-[var(--parlo-on-solid)] scale-[0.98] shadow-md"
+                        : "bg-[var(--parlo-surface)] border-[var(--parlo-primary)]/60 text-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-soft)]"
+                    }`}
+                  >
+                    <Mic className="w-4 h-4" aria-hidden="true" />
+                    {isPttActive ? "Listening…" : "Hold to Speak"}
+                  </button>
+                )}
+
                 {isLive && (
                   <button
                     type="button"
@@ -667,6 +722,42 @@ export function StudioView({
                       </>
                     )}
                   </button>
+                )}
+
+                {onChangeMicMode && (
+                  <div
+                    role="group"
+                    aria-label="Microphone mode"
+                    className="inline-flex items-center p-0.5 rounded-lg bg-[var(--parlo-surface)] border border-[var(--parlo-border)] text-[11px]"
+                  >
+                    {(
+                      [
+                        { id: "hands-free", label: "Hands-Free" },
+                        { id: "push-to-talk", label: "Hold-to-Talk" },
+                      ] as const
+                    ).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => {
+                          sfxEngine.playToggle(opt.id === "push-to-talk");
+                          onChangeMicMode(opt.id);
+                        }}
+                        title={
+                          opt.id === "push-to-talk"
+                            ? "Best for noisy cafés or commutes — hold Space or button to speak"
+                            : "Open mic — speak freely anytime"
+                        }
+                        className={`px-2.5 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                          micMode === opt.id
+                            ? "bg-[var(--parlo-primary-soft)] text-[var(--parlo-primary)]"
+                            : "text-[var(--parlo-ink-muted)] hover:text-[var(--parlo-ink)]"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
                 )}
               </div>
 
@@ -1457,38 +1548,13 @@ export function StudioView({
                 </div>
 
                 <div className="pt-5 border-t border-[var(--parlo-border)] space-y-4">
-                  <h3 className="text-sm font-semibold text-[var(--parlo-ink)]">
-                    Partner Delivery
-                  </h3>
-
-                  <div>
-                    <div className="flex items-center justify-between text-xs mb-1.5">
-                      <span className="font-medium text-[var(--parlo-ink-secondary)]">
-                        Speaking Pace
-                      </span>
-                      <span className="text-[var(--parlo-ink-muted)] capitalize">
-                        {speakingPace}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-1 p-1 bg-[var(--parlo-canvas)] border border-[var(--parlo-border)] rounded-lg">
-                      {(["slow", "natural", "brisk"] as SpeakingPace[]).map(
-                        (pace) => (
-                          <button
-                            key={pace}
-                            type="button"
-                            disabled={isLive || isConnecting}
-                            onClick={() => onChangeSpeakingPace(pace)}
-                            className={`py-1.5 text-xs font-medium rounded-md capitalize transition-colors cursor-pointer disabled:cursor-not-allowed ${
-                              speakingPace === pace
-                                ? "bg-[var(--parlo-primary)] text-[var(--parlo-on-solid)] shadow-xs"
-                                : "text-[var(--parlo-ink-muted)] hover:text-[var(--parlo-ink)]"
-                            }`}
-                          >
-                            {pace}
-                          </button>
-                        )
-                      )}
-                    </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold text-[var(--parlo-ink)]">
+                      Partner Coaching Style
+                    </h3>
+                    <span className="text-[11px] font-mono text-[var(--parlo-ink-muted)]">
+                      Pace in Settings
+                    </span>
                   </div>
 
                   <div>
@@ -1544,6 +1610,7 @@ export function StudioView({
       <WordDictionaryPopover
         anchor={selectedWordAnchor}
         language={language}
+        level={level}
         dialectLabel={activeDialect?.label}
         scenarioTitle={scenario.title}
         savedPhraseStrings={savedPhraseStrings}

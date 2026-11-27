@@ -1,33 +1,49 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useMotionValue, useSpring } from "motion/react";
 import {
+  CloudOff,
   Command,
   Flame,
+  Loader2,
   LogIn,
   LogOut,
   Moon,
   Sun,
+  Upload,
 } from "lucide-react";
 import { AtmosphericBackdrop } from "./components/AtmosphericBackdrop";
 import { CommandPalette } from "./components/CommandPalette";
 import { LanguageCultureMenu } from "./components/LanguageCultureMenu";
 import { MagnificationDock } from "./components/MagnificationDock";
+import { OfflineIndicator } from "./components/OfflineIndicator";
 import { OnboardingFlow } from "./components/OnboardingFlow";
 import { ParloLogo } from "./components/ParloLogo";
 import { ParloTutorChat } from "./components/ParloTutorChat";
 import { PhrasebookView } from "./components/PhrasebookView";
 import { PricingSection } from "./components/PricingSection";
-import { ReviewView } from "./components/ReviewView";
+import { PWAInstallButton } from "./components/PWAInstallButton";
 import { ScenariosView } from "./components/ScenariosView";
 import { SoundscapePanel } from "./components/SoundscapePanel";
-import { SpatialSceneView } from "./components/SpatialSceneView";
 import { StudioView } from "./components/StudioView";
 import { getLanguageByCode, SCENARIOS } from "./data/catalog";
 import { useAuth } from "./hooks/useAuth";
 import { useLivePartner } from "./hooks/useLivePartner";
+import {
+  computeGuestMigrationSummary,
+  generateClientId,
+  getStorageScope,
+  GuestMigrationSummary,
+  mergeGuestIntoAccount,
+  migrateLegacyV1ToGuest,
+  readScopedLearningData,
+  writeScopedCollection,
+} from "./lib/accountStorage";
 import { ambientEngine, SoundscapeLayerId } from "./lib/ambientAudio";
 import { speakWithBrowserTts } from "./lib/audio";
-import { getDailyCulturalMission } from "./lib/dailyMission";
+import {
+  didSessionCompleteDailyMission,
+  getDailyCulturalMission,
+} from "./lib/dailyMission";
 import { getDialectById, getDialectsForLanguage } from "./lib/dialects";
 import { syncDocumentSeo } from "./lib/seo";
 import { sfxEngine } from "./lib/sfx";
@@ -35,6 +51,7 @@ import { computeDailyStreak } from "./lib/streaks";
 import {
   CountryFontSpec,
   createInitialCategoryFonts,
+  ensureCulturalFontLoaded,
   getCultureByLanguage,
   pickRandomCountryFont,
   syncCulturalMotifCssVariables,
@@ -44,6 +61,7 @@ import {
   fetchReplyHints,
   fetchTurnFeedback,
   fetchTurnTranslation,
+  setApiTokenProvider,
 } from "./lib/api";
 import {
   fetchAccountState,
@@ -61,6 +79,7 @@ import {
   CoachFeedback,
   CorrectionStyle,
   DebriefReport,
+  MicMode,
   PracticeSessionRecord,
   ReplySuggestion,
   SavedPhrase,
@@ -70,16 +89,26 @@ import {
   VoiceName,
 } from "./types";
 
-const PHRASES_STORAGE_KEY = "parlo_saved_phrases_v1";
-const SESSIONS_STORAGE_KEY = "parlo_practice_sessions_v1";
-const CUSTOM_SCENARIOS_KEY = "parlo_custom_scenarios_v1";
-const WEEKLY_GOAL_STORAGE_KEY = "parlo_weekly_goal_v1";
+const SpatialSceneView = lazy(() =>
+  import("./components/SpatialSceneView").then((m) => ({
+    default: m.SpatialSceneView,
+  }))
+);
+
+const ReviewView = lazy(() =>
+  import("./components/ReviewView").then((m) => ({
+    default: m.ReviewView,
+  }))
+);
+
 const THEME_STORAGE_KEY = "parlo_theme_v3";
 const SFX_STORAGE_KEY = "parlo_sfx_enabled_v1";
 const AMBIENT_VOL_STORAGE_KEY = "parlo_ambient_volume_v1";
 const ONBOARDING_DONE_KEY = "parlo_onboarding_completed_v1";
-const DIALECT_STORAGE_KEY = "parlo_dialect_by_lang_v1";
-const DAILY_MISSION_STORAGE_KEY = "parlo_daily_missions_v1";
+
+if (typeof localStorage !== "undefined") {
+  migrateLegacyV1ToGuest(localStorage);
+}
 
 function readStorage<T>(key: string, fallback: T): T {
   try {
@@ -92,10 +121,10 @@ function readStorage<T>(key: string, fallback: T): T {
 
 const VIEW_ORDER: AppView[] = [
   "studio",
-  "spatial",
   "scenarios",
   "phrasebook",
   "review",
+  "spatial",
   "pricing",
 ];
 
@@ -107,6 +136,14 @@ export default function App() {
   >(() => createInitialCategoryFonts());
   const { user, authError, signInWithGoogle, logout, getToken, clearAuthError } =
     useAuth();
+
+  const storageScope = getStorageScope(user?.uid);
+  const syncedScopeRef = useRef<string>("guest");
+
+  // Register Firebase ID token provider so AI coaching & chat routes authenticate signed-in users
+  useEffect(() => {
+    setApiTokenProvider(getToken);
+  }, [getToken]);
 
   const handleNavigateView = useCallback((view: AppView) => {
     setActiveView((prev) => {
@@ -124,25 +161,29 @@ export default function App() {
     }));
   }, []);
 
-  // Persistent collections (local cache + seamless account sync when signed in)
-  const [customScenarios, setCustomScenarios] = useState<Scenario[]>(() =>
-    readStorage<Scenario[]>(CUSTOM_SCENARIOS_KEY, [])
+  // Account-scoped persistent collections (isolated between guest and each signed-in UID)
+  const initialScopedRef = useRef(readScopedLearningData("guest"));
+  const [customScenarios, setCustomScenarios] = useState<Scenario[]>(
+    () => initialScopedRef.current.customScenarios
   );
-  const [savedPhrases, setSavedPhrases] = useState<SavedPhrase[]>(() =>
-    readStorage<SavedPhrase[]>(PHRASES_STORAGE_KEY, [])
+  const [savedPhrases, setSavedPhrases] = useState<SavedPhrase[]>(
+    () => initialScopedRef.current.savedPhrases
   );
-  const [sessions, setSessions] = useState<PracticeSessionRecord[]>(() =>
-    readStorage<PracticeSessionRecord[]>(SESSIONS_STORAGE_KEY, [])
+  const [sessions, setSessions] = useState<PracticeSessionRecord[]>(
+    () => initialScopedRef.current.sessions
   );
-  const [weeklyGoal, setWeeklyGoal] = useState<number>(() => {
-    const stored = readStorage<number>(WEEKLY_GOAL_STORAGE_KEY, 4);
-    return typeof stored === "number" && stored >= 1 && stored <= 14 ? stored : 4;
-  });
+  const [weeklyGoal, setWeeklyGoal] = useState<number>(
+    () => initialScopedRef.current.weeklyGoal
+  );
   const [selectedPlanId, setSelectedPlanId] = useState<string>("starter");
   const [commandOpen, setCommandOpen] = useState<boolean>(false);
   const [chatOpen, setChatOpen] = useState<boolean>(false);
   const [chatMessageCount, setChatMessageCount] = useState<number>(0);
   const [soundPanelOpen, setSoundPanelOpen] = useState<boolean>(false);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
+  const [pendingGuestMigration, setPendingGuestMigration] =
+    useState<GuestMigrationSummary | null>(null);
+  const [importingGuestData, setImportingGuestData] = useState<boolean>(false);
   const [onboardingOpen, setOnboardingOpen] = useState<boolean>(
     () => !readStorage<boolean>(ONBOARDING_DONE_KEY, false)
   );
@@ -259,14 +300,6 @@ export default function App() {
   }, [themeId]);
 
   useEffect(() => {
-    const viewOrder: AppView[] = [
-      "studio",
-      "spatial",
-      "scenarios",
-      "phrasebook",
-      "review",
-      "pricing",
-    ];
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -295,8 +328,8 @@ export default function App() {
         return;
       }
       const num = Number(e.key);
-      if (num >= 1 && num <= viewOrder.length) {
-        handleNavigateView(viewOrder[num - 1]);
+      if (num >= 1 && num <= VIEW_ORDER.length) {
+        handleNavigateView(VIEW_ORDER[num - 1]);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -342,73 +375,12 @@ export default function App() {
     headerPointerY.set(0);
   }, [headerPointerX, headerPointerY]);
 
-  // Synchronize user data when signed in via Google Sign-In
-  useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
-
-    const syncFromAccount = async () => {
-      const token = await getToken();
-      if (!token || cancelled) return;
-      try {
-        const account = await fetchAccountState(token);
-        if (cancelled) return;
-
-        if (
-          typeof account.weeklySessionGoal === "number" &&
-          account.weeklySessionGoal >= 1
-        ) {
-          setWeeklyGoal(account.weeklySessionGoal);
-        }
-
-        // Merge cloud records with any local guest records so nothing is lost on sign-in
-        setSessions((localPrev) => {
-          const byId = new Map<string, PracticeSessionRecord>();
-          for (const s of account.sessions) byId.set(s.id, s);
-          for (const s of localPrev) {
-            if (!byId.has(s.id)) {
-              byId.set(s.id, s);
-              void persistPracticeSession(token, s).catch(() => {});
-            }
-          }
-          return Array.from(byId.values()).sort((a, b) => b.date - a.date);
-        });
-
-        setSavedPhrases((localPrev) => {
-          const byId = new Map<string, SavedPhrase>();
-          for (const p of account.phrases) byId.set(p.id, p);
-          for (const p of localPrev) {
-            if (!byId.has(p.id)) {
-              byId.set(p.id, p);
-              void persistSavedPhrase(token, p).catch(() => {});
-            }
-          }
-          return Array.from(byId.values()).sort(
-            (a, b) => b.createdAt - a.createdAt
-          );
-        });
-
-        setCustomScenarios((localPrev) => {
-          const byId = new Map<string, Scenario>();
-          for (const sc of account.customScenarios) byId.set(sc.id, sc);
-          for (const sc of localPrev) {
-            if (!byId.has(sc.id)) {
-              byId.set(sc.id, sc);
-              void persistCustomScenario(token, sc).catch(() => {});
-            }
-          }
-          return Array.from(byId.values());
-        });
-      } catch {
-        // Keep local state interactive if remote sync is transiently unavailable
-      }
-    };
-
-    void syncFromAccount();
-    return () => {
-      cancelled = true;
-    };
-  }, [getToken, user]);
+  const reportSyncError = useCallback((message?: string) => {
+    setSyncNotice(
+      message ??
+        "Saved on this device — cloud sync failed and will retry when you reconnect."
+    );
+  }, []);
 
   const allScenarios = useMemo(
     () => [...customScenarios, ...SCENARIOS],
@@ -438,10 +410,10 @@ export default function App() {
   const [autoCoach, setAutoCoach] = useState<boolean>(true);
   const [dialectByLanguage, setDialectByLanguage] = useState<
     Record<string, string>
-  >(() => readStorage<Record<string, string>>(DIALECT_STORAGE_KEY, {}));
+  >(() => initialScopedRef.current.dialectByLanguage);
   const [completedMissions, setCompletedMissions] = useState<
     Record<string, boolean>
-  >(() => readStorage<Record<string, boolean>>(DAILY_MISSION_STORAGE_KEY, {}));
+  >(() => initialScopedRef.current.completedMissions);
 
   // Per-session coaching state
   const [coachNotes, setCoachNotes] = useState<CoachFeedback[]>([]);
@@ -452,6 +424,173 @@ export default function App() {
   const [lastArchivedSessionId, setLastArchivedSessionId] = useState<
     string | null
   >(null);
+  const [wasLastSessionRecovered, setWasLastSessionRecovered] = useState(false);
+
+  // Account-isolated state hydration & explicit guest migration prompt on auth transitions
+  useEffect(() => {
+    let cancelled = false;
+    const nextScope = getStorageScope(user?.uid);
+    syncedScopeRef.current = nextScope;
+
+    // Immediately load the target scope's local cache so prior account data never lingers
+    const cached = readScopedLearningData(nextScope);
+    setSessions(cached.sessions);
+    setSavedPhrases(cached.savedPhrases);
+    setCustomScenarios(cached.customScenarios);
+    setWeeklyGoal(cached.weeklyGoal);
+    setDialectByLanguage(cached.dialectByLanguage);
+    setCompletedMissions(cached.completedMissions);
+    setLastArchivedSessionId(null);
+    setWasLastSessionRecovered(false);
+    setPendingGuestMigration(null);
+    setSyncNotice(null);
+
+    if (!user) return;
+
+    const syncFromAccount = async () => {
+      const token = await getToken();
+      if (!token || cancelled || syncedScopeRef.current !== nextScope) return;
+      try {
+        const account = await fetchAccountState(token);
+        if (cancelled || syncedScopeRef.current !== nextScope) return;
+
+        const nextGoal =
+          typeof account.weeklySessionGoal === "number" &&
+          account.weeklySessionGoal >= 1 &&
+          account.weeklySessionGoal <= 14
+            ? account.weeklySessionGoal
+            : cached.weeklyGoal;
+
+        const sortedSessions = [...account.sessions].sort(
+          (a, b) => b.date - a.date
+        );
+        const sortedPhrases = [...account.phrases].sort(
+          (a, b) => b.createdAt - a.createdAt
+        );
+
+        setWeeklyGoal(nextGoal);
+        setSessions(sortedSessions);
+        setSavedPhrases(sortedPhrases);
+        setCustomScenarios(account.customScenarios);
+
+        writeScopedCollection(nextScope, "weekly_goal", nextGoal);
+        writeScopedCollection(nextScope, "sessions", sortedSessions);
+        writeScopedCollection(nextScope, "phrases", sortedPhrases);
+        writeScopedCollection(
+          nextScope,
+          "custom_scenarios",
+          account.customScenarios
+        );
+
+        // Offer explicit, non-destructive import if this browser has guest data not yet in the account
+        const dismissedKey = `parlo:v2:${nextScope}:guest_import_dismissed`;
+        const alreadyDismissed =
+          typeof localStorage !== "undefined" &&
+          localStorage.getItem(dismissedKey) === "1";
+
+        if (!alreadyDismissed) {
+          const guestData = readScopedLearningData("guest");
+          const summary = computeGuestMigrationSummary(guestData, {
+            sessions: sortedSessions,
+            savedPhrases: sortedPhrases,
+            customScenarios: account.customScenarios,
+          });
+          if (summary.totalItems > 0) {
+            setPendingGuestMigration(summary);
+          }
+        }
+      } catch {
+        if (!cancelled && syncedScopeRef.current === nextScope) {
+          reportSyncError(
+            "Cloud sync is temporarily unavailable — showing this device's cached progress."
+          );
+        }
+      }
+    };
+
+    void syncFromAccount();
+    return () => {
+      cancelled = true;
+    };
+  }, [getToken, reportSyncError, user]);
+
+  const handleImportGuestData = useCallback(async () => {
+    if (!user || importingGuestData) return;
+    setImportingGuestData(true);
+    try {
+      const guestData = readScopedLearningData("guest");
+      const merged = mergeGuestIntoAccount(guestData, {
+        sessions,
+        savedPhrases,
+        customScenarios,
+      });
+
+      setSessions(merged.mergedSessions);
+      setSavedPhrases(merged.mergedPhrases);
+      setCustomScenarios(merged.mergedScenarios);
+      writeScopedCollection(storageScope, "sessions", merged.mergedSessions);
+      writeScopedCollection(storageScope, "phrases", merged.mergedPhrases);
+      writeScopedCollection(
+        storageScope,
+        "custom_scenarios",
+        merged.mergedScenarios
+      );
+
+      const token = await getToken();
+      if (token) {
+        const writes = [
+          ...merged.addedSessions.map((s) => persistPracticeSession(token, s)),
+          ...merged.addedPhrases.map((p) => persistSavedPhrase(token, p)),
+          ...merged.addedScenarios.map((sc) =>
+            persistCustomScenario(token, sc)
+          ),
+        ];
+        const results = await Promise.allSettled(writes);
+        if (results.some((r) => r.status === "rejected")) {
+          reportSyncError(
+            "Imported guest progress locally, but some items could not be synced to the cloud yet."
+          );
+        } else {
+          setSyncNotice(null);
+        }
+      }
+
+      try {
+        localStorage.setItem(
+          `parlo:v2:${storageScope}:guest_import_dismissed`,
+          "1"
+        );
+      } catch {
+        // ignore storage errors
+      }
+      setPendingGuestMigration(null);
+      sfxEngine.playSavePhrase();
+    } finally {
+      setImportingGuestData(false);
+    }
+  }, [
+    customScenarios,
+    getToken,
+    importingGuestData,
+    reportSyncError,
+    savedPhrases,
+    sessions,
+    storageScope,
+    user,
+  ]);
+
+  const handleDismissGuestMigration = useCallback(() => {
+    try {
+      localStorage.setItem(
+        `parlo:v2:${storageScope}:guest_import_dismissed`,
+        "1"
+      );
+    } catch {
+      // ignore storage errors
+    }
+    setPendingGuestMigration(null);
+    sfxEngine.playCloseModal();
+  }, [storageScope]);
 
   const language = useMemo(
     () => getLanguageByCode(languageCode),
@@ -507,67 +646,48 @@ export default function App() {
     });
   }, [activeCulture.atelierName, activeScenario.title, activeView, language.name]);
 
-  // Sync local mirror
+  // Sync account-scoped local mirror (guarded by syncedScopeRef to prevent cross-scope writes)
   useEffect(() => {
-    try {
-      localStorage.setItem(PHRASES_STORAGE_KEY, JSON.stringify(savedPhrases));
-    } catch {
-      // ignore quota issues
-    }
-  }, [savedPhrases]);
+    if (syncedScopeRef.current !== storageScope) return;
+    writeScopedCollection(storageScope, "phrases", savedPhrases);
+  }, [savedPhrases, storageScope]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(sessions));
-    } catch {
-      // ignore quota issues
-    }
-  }, [sessions]);
+    if (syncedScopeRef.current !== storageScope) return;
+    writeScopedCollection(storageScope, "sessions", sessions);
+  }, [sessions, storageScope]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(
-        CUSTOM_SCENARIOS_KEY,
-        JSON.stringify(customScenarios)
-      );
-    } catch {
-      // ignore quota issues
-    }
-  }, [customScenarios]);
+    if (syncedScopeRef.current !== storageScope) return;
+    writeScopedCollection(storageScope, "custom_scenarios", customScenarios);
+  }, [customScenarios, storageScope]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(WEEKLY_GOAL_STORAGE_KEY, JSON.stringify(weeklyGoal));
-    } catch {
-      // ignore quota issues
-    }
-  }, [weeklyGoal]);
+    if (syncedScopeRef.current !== storageScope) return;
+    writeScopedCollection(storageScope, "weekly_goal", weeklyGoal);
+  }, [storageScope, weeklyGoal]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(
-        DIALECT_STORAGE_KEY,
-        JSON.stringify(dialectByLanguage)
-      );
-    } catch {
-      // ignore quota issues
-    }
-  }, [dialectByLanguage]);
+    if (syncedScopeRef.current !== storageScope) return;
+    writeScopedCollection(storageScope, "dialects", dialectByLanguage);
+  }, [dialectByLanguage, storageScope]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(
-        DAILY_MISSION_STORAGE_KEY,
-        JSON.stringify(completedMissions)
-      );
-    } catch {
-      // ignore quota issues
-    }
-  }, [completedMissions]);
+    if (syncedScopeRef.current !== storageScope) return;
+    writeScopedCollection(storageScope, "daily_missions", completedMissions);
+  }, [completedMissions, storageScope]);
 
   const savedPhraseStrings = useMemo(
     () => new Set(savedPhrases.map((p) => p.phrase.trim().toLowerCase())),
     [savedPhrases]
+  );
+
+  const lastArchivedSession = useMemo(
+    () =>
+      lastArchivedSessionId
+        ? sessions.find((s) => s.id === lastArchivedSessionId) ?? null
+        : null,
+    [lastArchivedSessionId, sessions]
   );
 
   const handleChangeWeeklyGoal = useCallback(
@@ -576,11 +696,13 @@ export default function App() {
       setWeeklyGoal(clamped);
       void getToken().then((token) => {
         if (token) {
-          void persistWeeklyGoal(token, clamped).catch(() => {});
+          void persistWeeklyGoal(token, clamped).catch(() =>
+            reportSyncError()
+          );
         }
       });
     },
-    [getToken]
+    [getToken, reportSyncError]
   );
 
   const analyzeTurnInternal = useCallback(
@@ -634,6 +756,87 @@ export default function App() {
     ]
   );
 
+  const archiveCapturedSession = useCallback(
+    (
+      capturedTurns: TranscriptTurn[],
+      duration: number,
+      recovered = false
+    ) => {
+      const nonEmpty = capturedTurns.filter((t) => t.text.trim().length > 0);
+      if (nonEmpty.length === 0) return;
+
+      const record: PracticeSessionRecord = {
+        id: generateClientId("session"),
+        date: Date.now(),
+        languageCode: language.code,
+        level,
+        scenarioTitle: activeScenario.title,
+        partnerName: activeScenario.partnerName,
+        durationSeconds: Math.max(1, duration),
+        userTurnsCount: nonEmpty.filter((t) => t.role === "user").length,
+        partnerTurnsCount: nonEmpty.filter((t) => t.role === "partner").length,
+        goalsCompleted: completedGoals.length,
+        goalsTotal: activeScenario.goals.length,
+        transcript: nonEmpty.map((t) => ({
+          role: t.role,
+          text: t.text,
+        })),
+      };
+
+      setSessions((prev) => [record, ...prev]);
+      setLastArchivedSessionId(record.id);
+      setWasLastSessionRecovered(recovered);
+
+      if (
+        !completedMissions[dailyMission.id] &&
+        didSessionCompleteDailyMission({
+          mission: dailyMission,
+          sessionLanguageCode: language.code,
+          sessionScenarioId: activeScenario.id,
+          userTurnsCount: record.userTurnsCount,
+          goalsCompleted: record.goalsCompleted,
+        })
+      ) {
+        setCompletedMissions((prev) => ({
+          ...prev,
+          [dailyMission.id]: true,
+        }));
+        sfxEngine.playSavePhrase();
+      }
+
+      void getToken().then((token) => {
+        if (token) {
+          void persistPracticeSession(token, record).catch(() =>
+            reportSyncError()
+          );
+        }
+      });
+    },
+    [
+      activeScenario.goals.length,
+      activeScenario.id,
+      activeScenario.partnerName,
+      activeScenario.title,
+      completedGoals.length,
+      completedMissions,
+      dailyMission,
+      getToken,
+      language.code,
+      level,
+      reportSyncError,
+    ]
+  );
+
+  const [micMode, setMicMode] = useState<MicMode>("hands-free");
+
+  // Lazily load the cultural font for the active view's editorial heading
+  useEffect(() => {
+    const viewFont = categoryFonts[activeView];
+    if (viewFont?.code) {
+      ensureCulturalFontLoaded(viewFont.code);
+    }
+  }, [activeView, categoryFonts]);
+
   const live = useLivePartner({
     language,
     level,
@@ -641,8 +844,10 @@ export default function App() {
     scenario: activeScenario,
     correctionStyle,
     speakingPace,
+    micMode,
     dialectLabel: activeDialect.label,
     dialectDirective: activeDialect.speechStyleDirective,
+    getAuthToken: getToken,
     onUserTurnFinalized: (turn, allTurns) => {
       if (autoCoach) {
         void analyzeTurnInternal(turn, allTurns, (turnId, patch) => {
@@ -651,6 +856,9 @@ export default function App() {
           );
         });
       }
+    },
+    onUnexpectedDisconnect: ({ turns: capturedTurns, elapsedSeconds }) => {
+      archiveCapturedSession(capturedTurns, elapsedSeconds, true);
     },
   });
 
@@ -665,6 +873,7 @@ export default function App() {
       setActiveView("studio");
     }
     setLastArchivedSessionId(null);
+    setWasLastSessionRecovered(false);
     setCoachNotes([]);
     setHints([]);
     setHintsError(null);
@@ -675,62 +884,11 @@ export default function App() {
 
   const handleEndSession = useCallback(async () => {
     sfxEngine.playSessionEnd();
-    const capturedTurns = live.turns.filter((t) => t.text.trim().length > 0);
+    const capturedTurns = live.turns;
     const duration = live.elapsedSeconds;
     await live.stopSession();
-
-    if (capturedTurns.length > 0) {
-      const record: PracticeSessionRecord = {
-        id: `session-${Date.now()}`,
-        date: Date.now(),
-        languageCode: language.code,
-        level,
-        scenarioTitle: activeScenario.title,
-        partnerName: activeScenario.partnerName,
-        durationSeconds: Math.max(1, duration),
-        userTurnsCount: capturedTurns.filter((t) => t.role === "user").length,
-        partnerTurnsCount: capturedTurns.filter((t) => t.role === "partner")
-          .length,
-        goalsCompleted: completedGoals.length,
-        goalsTotal: activeScenario.goals.length,
-        transcript: capturedTurns.map((t) => ({
-          role: t.role,
-          text: t.text,
-        })),
-      };
-      setSessions((prev) => [record, ...prev]);
-      setLastArchivedSessionId(record.id);
-
-      if (
-        record.userTurnsCount >= dailyMission.targetTurns &&
-        !completedMissions[dailyMission.id]
-      ) {
-        setCompletedMissions((prev) => ({
-          ...prev,
-          [dailyMission.id]: true,
-        }));
-        sfxEngine.playSavePhrase();
-      }
-
-      void getToken().then((token) => {
-        if (token) {
-          void persistPracticeSession(token, record).catch(() => {});
-        }
-      });
-    }
-  }, [
-    activeScenario.goals.length,
-    activeScenario.partnerName,
-    activeScenario.title,
-    completedGoals.length,
-    completedMissions,
-    dailyMission.id,
-    dailyMission.targetTurns,
-    getToken,
-    language.code,
-    level,
-    live,
-  ]);
+    archiveCapturedSession(capturedTurns, duration, false);
+  }, [archiveCapturedSession, live]);
 
   const handleTranslateTurn = useCallback(
     async (turn: TranscriptTurn) => {
@@ -881,14 +1039,22 @@ export default function App() {
 
   const handleCreateScenario = useCallback(
     (scenario: Scenario) => {
-      setCustomScenarios((prev) => [scenario, ...prev]);
+      const safeScenario: Scenario = {
+        ...scenario,
+        id: scenario.id.startsWith("custom-")
+          ? generateClientId("custom")
+          : scenario.id,
+      };
+      setCustomScenarios((prev) => [safeScenario, ...prev]);
       void getToken().then((token) => {
         if (token) {
-          void persistCustomScenario(token, scenario).catch(() => {});
+          void persistCustomScenario(token, safeScenario).catch(() =>
+            reportSyncError()
+          );
         }
       });
     },
-    [getToken]
+    [getToken, reportSyncError]
   );
 
   const handleSavePhrase = useCallback(
@@ -908,7 +1074,7 @@ export default function App() {
           return prev;
         }
         created = {
-          id: `phrase-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          id: generateClientId("phrase"),
           phrase: params.phrase.trim(),
           translation: params.translation.trim(),
           reading: params.reading?.trim() || undefined,
@@ -924,11 +1090,13 @@ export default function App() {
 
       void getToken().then((token) => {
         if (token && created) {
-          void persistSavedPhrase(token, created).catch(() => {});
+          void persistSavedPhrase(token, created).catch(() =>
+            reportSyncError()
+          );
         }
       });
     },
-    [getToken]
+    [getToken, reportSyncError]
   );
 
   const handleToggleMastered = useCallback(
@@ -947,11 +1115,13 @@ export default function App() {
       );
       void getToken().then((token) => {
         if (token) {
-          void persistPhraseMastered(token, id, nextMastered).catch(() => {});
+          void persistPhraseMastered(token, id, nextMastered).catch(() =>
+            reportSyncError()
+          );
         }
       });
     },
-    [getToken]
+    [getToken, reportSyncError]
   );
 
   const handleDeletePhrase = useCallback(
@@ -960,11 +1130,11 @@ export default function App() {
       setSavedPhrases((prev) => prev.filter((p) => p.id !== id));
       void getToken().then((token) => {
         if (token) {
-          void removeSavedPhrase(token, id).catch(() => {});
+          void removeSavedPhrase(token, id).catch(() => reportSyncError());
         }
       });
     },
-    [getToken]
+    [getToken, reportSyncError]
   );
 
   const handleSaveDebrief = useCallback(
@@ -974,11 +1144,13 @@ export default function App() {
       );
       void getToken().then((token) => {
         if (token) {
-          void persistSessionDebrief(token, sessionId, debrief).catch(() => {});
+          void persistSessionDebrief(token, sessionId, debrief).catch(() =>
+            reportSyncError()
+          );
         }
       });
     },
-    [getToken]
+    [getToken, reportSyncError]
   );
 
   const handleToggleGoal = useCallback((index: number) => {
@@ -1167,6 +1339,8 @@ export default function App() {
               <span>{dailyStreak.currentStreak}d</span>
             </motion.button>
 
+            <PWAInstallButton />
+
             <AnimatePresence mode="wait" initial={false}>
               {isSessionActive ? (
                 <motion.button
@@ -1184,7 +1358,7 @@ export default function App() {
                   End
                   <span className="hidden sm:inline"> Session</span>
                 </motion.button>
-              ) : (
+              ) : activeView !== "studio" ? (
                 <motion.button
                   key="header-start-practice"
                   type="button"
@@ -1200,7 +1374,7 @@ export default function App() {
                   <span className="sm:hidden">Practice</span>
                   <span className="hidden sm:inline">Start Practice</span>
                 </motion.button>
-              )}
+              ) : null}
             </AnimatePresence>
           </div>
         </div>
@@ -1211,6 +1385,108 @@ export default function App() {
         className="relative z-10 flex-1"
         style={{ perspective: "1600px" }}
       >
+        {/* Explicit Non-Destructive Guest Data Import Banner & Cloud Sync Notices */}
+        {(pendingGuestMigration || syncNotice) && activeView !== "spatial" && (
+          <div className="max-w-[1360px] mx-auto px-4 sm:px-6 pt-4 space-y-2.5">
+            {pendingGuestMigration && user && (
+              <div
+                role="region"
+                aria-label="Import guest progress"
+                className="rounded-xl border border-[var(--parlo-primary)]/45 bg-[var(--parlo-surface-solid)] px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-xs"
+              >
+                <div className="flex items-start gap-2.5 text-xs text-[var(--parlo-ink-secondary)]">
+                  <Upload
+                    className="w-4 h-4 text-[var(--parlo-primary)] shrink-0 mt-0.5"
+                    aria-hidden="true"
+                  />
+                  <div>
+                    <p className="font-semibold text-[var(--parlo-ink)]">
+                      Guest progress found on this device
+                    </p>
+                    <p className="mt-0.5 text-[var(--parlo-ink-muted)]">
+                      {pendingGuestMigration.newSessionsCount > 0
+                        ? `${pendingGuestMigration.newSessionsCount} ${
+                            pendingGuestMigration.newSessionsCount === 1
+                              ? "session"
+                              : "sessions"
+                          }`
+                        : null}
+                      {pendingGuestMigration.newSessionsCount > 0 &&
+                      pendingGuestMigration.newPhrasesCount > 0
+                        ? " · "
+                        : null}
+                      {pendingGuestMigration.newPhrasesCount > 0
+                        ? `${pendingGuestMigration.newPhrasesCount} saved ${
+                            pendingGuestMigration.newPhrasesCount === 1
+                              ? "phrase"
+                              : "phrases"
+                          }`
+                        : null}
+                      {(pendingGuestMigration.newSessionsCount > 0 ||
+                        pendingGuestMigration.newPhrasesCount > 0) &&
+                      pendingGuestMigration.newScenariosCount > 0
+                        ? " · "
+                        : null}
+                      {pendingGuestMigration.newScenariosCount > 0
+                        ? `${pendingGuestMigration.newScenariosCount} custom ${
+                            pendingGuestMigration.newScenariosCount === 1
+                              ? "scenario"
+                              : "scenarios"
+                          }`
+                        : null}
+                      {" — import into your signed-in account or keep separate."}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={importingGuestData}
+                    onClick={() => void handleImportGuestData()}
+                    className="min-h-[34px] inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[var(--parlo-on-solid)] bg-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-hover)] disabled:opacity-60 rounded-lg transition-colors cursor-pointer"
+                  >
+                    {importingGuestData && (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                    )}
+                    Import into Account
+                  </button>
+                  <button
+                    type="button"
+                    disabled={importingGuestData}
+                    onClick={handleDismissGuestMigration}
+                    className="min-h-[34px] px-3 py-1.5 text-xs font-medium text-[var(--parlo-ink-muted)] hover:text-[var(--parlo-ink)] rounded-lg border border-[var(--parlo-border)] cursor-pointer"
+                  >
+                    Keep Separate
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {syncNotice && (
+              <div
+                role="status"
+                aria-live="polite"
+                className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs text-[var(--parlo-ink)]"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <CloudOff
+                    className="w-3.5 h-3.5 text-amber-500 shrink-0"
+                    aria-hidden="true"
+                  />
+                  {syncNotice}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSyncNotice(null)}
+                  className="text-xs font-medium text-[var(--parlo-ink-muted)] hover:text-[var(--parlo-ink)] cursor-pointer"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={activeView}
@@ -1255,9 +1531,7 @@ export default function App() {
             voiceName={voiceName}
             onSelectVoice={setVoiceName}
             scenario={activeScenario}
-            allScenarios={allScenarios}
             categoryFont={categoryFonts.studio}
-            onSelectScenario={(sc) => void handleSelectScenario(sc)}
             onOpenScenarios={() => handleNavigateView("scenarios")}
             onOpenSpatial={() => handleNavigateView("spatial")}
             correctionStyle={correctionStyle}
@@ -1268,6 +1542,10 @@ export default function App() {
             onToggleAutoCoach={() => setAutoCoach((prev) => !prev)}
             connectionState={live.connectionState}
             isMuted={live.isMuted}
+            micMode={micMode}
+            onChangeMicMode={setMicMode}
+            isPttActive={live.isPttActive}
+            onPttActiveChange={live.setPttActive}
             isPartnerSpeaking={live.isPartnerSpeaking}
             micAvailable={live.micAvailable}
             errorMessage={live.errorMessage}
@@ -1292,6 +1570,12 @@ export default function App() {
             savedPhraseStrings={savedPhraseStrings}
             onSavePhrase={handleSavePhrase}
             lastArchivedSessionId={lastArchivedSessionId}
+            lastArchivedSession={lastArchivedSession}
+            wasLastSessionRecovered={wasLastSessionRecovered}
+            onDismissSummary={() => {
+              setLastArchivedSessionId(null);
+              setWasLastSessionRecovered(false);
+            }}
             onOpenReview={() => handleNavigateView("review")}
             dialects={activeDialects}
             activeDialectId={activeDialect.id}
@@ -1306,21 +1590,38 @@ export default function App() {
         )}
 
         {activeView === "spatial" && (
-          <SpatialSceneView
-            language={language}
-            scenarioTitle={activeScenario.title}
-            connectionState={live.connectionState}
-            isPartnerSpeaking={live.isPartnerSpeaking}
-            userLevelRef={live.userLevelRef}
-            partnerLevelRef={live.partnerLevelRef}
-            savedPhraseStrings={savedPhraseStrings}
-            onStartSession={handleStartPractice}
-            onEndSession={handleEndSession}
-            onSendTextTurn={live.sendTextTurn}
-            onSavePhrase={handleSavePhrase}
-            onOpenStudio={() => handleNavigateView("studio")}
-            onSelectLanguage={handleSelectLanguage}
-          />
+          <Suspense
+            fallback={
+              <div className="min-h-[70vh] flex flex-col items-center justify-center gap-3 px-6 text-center">
+                <Loader2
+                  className="w-6 h-6 animate-spin text-[var(--parlo-primary)]"
+                  aria-hidden="true"
+                />
+                <p className="text-sm font-medium text-[var(--parlo-ink)]">
+                  Loading 3D Rooms…
+                </p>
+                <p className="text-xs text-[var(--parlo-ink-muted)] max-w-xs">
+                  Preparing your interactive café, Tokyo counter, and Paris bookshop scene.
+                </p>
+              </div>
+            }
+          >
+            <SpatialSceneView
+              language={language}
+              scenarioTitle={activeScenario.title}
+              connectionState={live.connectionState}
+              isPartnerSpeaking={live.isPartnerSpeaking}
+              userLevelRef={live.userLevelRef}
+              partnerLevelRef={live.partnerLevelRef}
+              savedPhraseStrings={savedPhraseStrings}
+              onStartSession={handleStartPractice}
+              onEndSession={handleEndSession}
+              onSendTextTurn={live.sendTextTurn}
+              onSavePhrase={handleSavePhrase}
+              onOpenStudio={() => handleNavigateView("studio")}
+              onSelectLanguage={handleSelectLanguage}
+            />
+          </Suspense>
         )}
 
         {activeView === "scenarios" && (
@@ -1342,6 +1643,7 @@ export default function App() {
           <PhrasebookView
             phrases={savedPhrases}
             activeLanguageCode={languageCode}
+            storageScope={storageScope}
             categoryFont={categoryFonts.phrasebook}
             onSelectLanguage={handleSelectLanguage}
             onAddPhrase={handleSavePhrase}
@@ -1351,17 +1653,33 @@ export default function App() {
         )}
 
         {activeView === "review" && (
-          <ReviewView
-            sessions={sessions}
-            weeklyGoal={weeklyGoal}
-            activeLanguageCode={languageCode}
-            categoryFont={categoryFonts.review}
-            onSelectLanguage={handleSelectLanguage}
-            onChangeWeeklyGoal={handleChangeWeeklyGoal}
-            onSaveDebrief={handleSaveDebrief}
-            onSavePhrase={handleSavePhrase}
-            onStartNewSession={() => handleNavigateView("studio")}
-          />
+          <Suspense
+            fallback={
+              <div className="min-h-[55vh] flex flex-col items-center justify-center gap-3 px-6 text-center">
+                <Loader2
+                  className="w-6 h-6 animate-spin text-[var(--parlo-primary)]"
+                  aria-hidden="true"
+                />
+                <p className="text-sm font-medium text-[var(--parlo-ink)]">
+                  Loading Progress &amp; Coaching Debriefs…
+                </p>
+              </div>
+            }
+          >
+            <ReviewView
+              sessions={sessions}
+              savedPhrases={savedPhrases}
+              storageScope={storageScope}
+              weeklyGoal={weeklyGoal}
+              activeLanguageCode={languageCode}
+              categoryFont={categoryFonts.review}
+              onSelectLanguage={handleSelectLanguage}
+              onChangeWeeklyGoal={handleChangeWeeklyGoal}
+              onSaveDebrief={handleSaveDebrief}
+              onSavePhrase={handleSavePhrase}
+              onStartNewSession={() => handleNavigateView("studio")}
+            />
+          </Suspense>
         )}
 
         {activeView === "pricing" && (
@@ -1669,6 +1987,8 @@ export default function App() {
           }
         }}
       />
+
+      <OfflineIndicator />
       </div>
     </div>
   );

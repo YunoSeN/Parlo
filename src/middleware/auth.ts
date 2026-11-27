@@ -26,3 +26,29 @@ export const requireAuth = async (
     return res.status(401).json({ error: "Unauthorized: Invalid token" });
   }
 };
+
+/**
+ * Attaches req.user when a valid Firebase Bearer token is provided, without
+ * blocking guest preview users who are not signed in.
+ */
+export const attachOptionalAuth = async (
+  req: AuthRequest,
+  _res: Response,
+  next: NextFunction
+) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return next();
+  }
+
+  const token = authHeader.split("Bearer ")[1]?.trim();
+  if (!token) return next();
+
+  try {
+    req.user = await adminAuth.verifyIdToken(token);
+  } catch {
+    // Treat expired/invalid optional tokens as anonymous guest rather than failing
+  }
+  next();
+};
+

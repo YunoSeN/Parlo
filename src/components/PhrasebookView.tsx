@@ -29,6 +29,7 @@ import { TiltCard3D } from "./TiltCard3D";
 
 interface PhrasebookViewProps {
   phrases: SavedPhrase[];
+  storageScope?: string;
   activeLanguageCode?: string;
   categoryFont?: CountryFontSpec;
   onSelectLanguage?: (code: string) => void;
@@ -45,6 +46,7 @@ const SPRING_TAB = {
 
 export function PhrasebookView({
   phrases,
+  storageScope = "guest",
   activeLanguageCode = "es",
   categoryFont,
   onAddPhrase,
@@ -55,11 +57,18 @@ export function PhrasebookView({
   const [mode, setMode] = useState<"list" | "flashcards">("list");
   const [deckFilter, setDeckFilter] = useState<"due" | "all">("due");
   const [srsMap, setSrsMap] = useState<SrsScheduleMap>(() =>
-    readSrsScheduleMap()
+    readSrsScheduleMap(storageScope)
   );
   const [cardIndex, setCardIndex] = useState(0);
   const [slideDir, setSlideDir] = useState<1 | -1>(1);
   const [revealed, setRevealed] = useState(false);
+
+  // Reload account-scoped SRS schedule whenever signed-in user changes
+  useEffect(() => {
+    setSrsMap(readSrsScheduleMap(storageScope));
+    setCardIndex(0);
+    setRevealed(false);
+  }, [storageScope]);
 
   // Manual quick-add form
   const [showAdd, setShowAdd] = useState(false);
@@ -143,7 +152,7 @@ export function PhrasebookView({
       [currentCard.id]: nextState,
     };
     setSrsMap(updatedMap);
-    saveSrsScheduleMap(updatedMap);
+    saveSrsScheduleMap(updatedMap, storageScope);
 
     if (rating === "again") {
       sfxEngine.playToggle(false);

@@ -56,7 +56,7 @@ export function StudioTunerBar({
           role="group"
           aria-label="Proficiency level"
         >
-          {(["A2", "B1", "B2", "C1"] as CefrLevel[]).map((lvl) => {
+          {(["A1", "A2", "B1", "B2", "C1"] as CefrLevel[]).map((lvl) => {
             const active = level === lvl;
             return (
               <motion.button

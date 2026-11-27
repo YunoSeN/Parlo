@@ -679,6 +679,39 @@ export function buildMotifTileDataUri(code: string): string {
   return uri;
 }
 
+const loadedCulturalFonts = new Set<string>();
+
+const CULTURAL_FONT_QUERY: Record<string, string> = {
+  es: "Yeseva+One",
+  fr: "Cormorant+Garamond:ital,wght@0,600;1,500;1,600;1,700",
+  ja: "Shippori+Mincho:wght@500;600;700",
+  de: "Syne:wght@600;700",
+  it: "Cinzel:wght@500;600;700",
+  zh: "ZCOOL+XiaoWei",
+  ko: "Unbounded:wght@500;600",
+  pt: "Fraunces:ital,opsz,wght@0,9..144,500..700;1,9..144,500..700",
+};
+
+/**
+ * Lazily injects the Google Fonts stylesheet for a single active cultural
+ * display typeface on demand, avoiding 13 upfront blocking font downloads.
+ */
+export function ensureCulturalFontLoaded(code: string): void {
+  if (typeof document === "undefined") return;
+  const query = CULTURAL_FONT_QUERY[code];
+  if (!query || loadedCulturalFonts.has(code)) return;
+  loadedCulturalFonts.add(code);
+
+  const linkId = `parlo-culture-font-${code}`;
+  if (document.getElementById(linkId)) return;
+
+  const link = document.createElement("link");
+  link.id = linkId;
+  link.rel = "stylesheet";
+  link.href = `https://fonts.googleapis.com/css2?family=${query}&display=swap`;
+  document.head.appendChild(link);
+}
+
 let allMotifsRegistered = false;
 
 /**
@@ -689,6 +722,8 @@ export function syncCulturalMotifCssVariables(
   root: HTMLElement,
   activeCode: string
 ): void {
+  ensureCulturalFontLoaded(activeCode);
+
   if (!allMotifsRegistered) {
     for (const [code, spec] of Object.entries(CULTURAL_THEMES)) {
       root.style.setProperty(

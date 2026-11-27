@@ -54,7 +54,7 @@ export function syncDocumentSeo({
     },
     scenarios: {
       title: `Parlo Scenarios — Real-World ${languageName} Roleplay`,
-      description: `Browse curated café, travel, business, and custom ${languageName} roleplay scenarios calibrated for CEFR A2 to C1 speaking fluency.`,
+      description: `Browse curated café, travel, culture, and custom ${languageName} roleplay scenarios calibrated for CEFR A1 to C1 speaking fluency.`,
     },
     phrasebook: {
       title: `Parlo Phrasebook — ${languageName} Idioms & Flashcards`,

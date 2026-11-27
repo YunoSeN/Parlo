@@ -205,3 +205,121 @@ export function speakWithBrowserTts(text: string, locale: string): void {
     // ignore speechSynthesis errors in restricted browsers
   }
 }
+
+export interface MicCaptureHandle {
+  disconnect: () => void;
+  mode: "worklet" | "script-processor";
+}
+
+const WORKLET_PROCESSOR_SOURCE = `
+class ParloMicCaptureProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this._buffer = new Float32Array(2048);
+    this._offset = 0;
+  }
+  process(inputs) {
+    const input = inputs[0] && inputs[0][0];
+    if (!input) return true;
+    let i = 0;
+    while (i < input.length) {
+      const space = this._buffer.length - this._offset;
+      const toCopy = Math.min(space, input.length - i);
+      this._buffer.set(input.subarray(i, i + toCopy), this._offset);
+      this._offset += toCopy;
+      i += toCopy;
+      if (this._offset >= this._buffer.length) {
+        const chunk = this._buffer.slice(0);
+        this.port.postMessage(chunk, [chunk.buffer]);
+        this._offset = 0;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor("parlo-mic-capture", ParloMicCaptureProcessor);
+`;
+
+/**
+ * Attaches a microphone capture node preferring AudioWorkletNode (off-main-thread)
+ * and gracefully falling back to ScriptProcessorNode if AudioWorklet is unavailable.
+ */
+export async function createMicCaptureNode(
+  inputCtx: AudioContext,
+  source: MediaStreamAudioSourceNode,
+  onSamples: (samples: Float32Array) => void
+): Promise<MicCaptureHandle> {
+  const silentGain = inputCtx.createGain();
+  silentGain.gain.value = 0;
+
+  if (
+    typeof AudioWorkletNode !== "undefined" &&
+    inputCtx.audioWorklet &&
+    typeof Blob !== "undefined" &&
+    typeof URL !== "undefined"
+  ) {
+    let blobUrl: string | null = null;
+    try {
+      const blob = new Blob([WORKLET_PROCESSOR_SOURCE], {
+        type: "application/javascript",
+      });
+      blobUrl = URL.createObjectURL(blob);
+      await inputCtx.audioWorklet.addModule(blobUrl);
+      const workletNode = new AudioWorkletNode(inputCtx, "parlo-mic-capture", {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        channelCount: 1,
+      });
+      workletNode.port.onmessage = (event: MessageEvent<Float32Array>) => {
+        if (event.data instanceof Float32Array) {
+          onSamples(event.data);
+        }
+      };
+      source.connect(workletNode);
+      workletNode.connect(silentGain);
+      silentGain.connect(inputCtx.destination);
+      URL.revokeObjectURL(blobUrl);
+      blobUrl = null;
+
+      return {
+        mode: "worklet",
+        disconnect: () => {
+          workletNode.port.onmessage = null;
+          try {
+            workletNode.disconnect();
+            silentGain.disconnect();
+          } catch {
+            // ignore
+          }
+        },
+      };
+    } catch {
+      if (blobUrl) {
+        URL.revokeObjectURL(blobUrl);
+      }
+      // Fall through to ScriptProcessorNode
+    }
+  }
+
+  const processor = inputCtx.createScriptProcessor(4096, 1, 1);
+  processor.onaudioprocess = (audioEvent) => {
+    onSamples(audioEvent.inputBuffer.getChannelData(0));
+  };
+  source.connect(processor);
+  processor.connect(silentGain);
+  silentGain.connect(inputCtx.destination);
+
+  return {
+    mode: "script-processor",
+    disconnect: () => {
+      processor.onaudioprocess = null;
+      try {
+        processor.disconnect();
+        silentGain.disconnect();
+      } catch {
+        // ignore
+      }
+    },
+  };
+}
+

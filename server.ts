@@ -11,7 +11,21 @@ import {
   ThinkingLevel,
   Type,
 } from "@google/genai";
-import { requireAuth, AuthRequest } from "./src/middleware/auth.ts";
+import {
+  attachOptionalAuth,
+  AuthRequest,
+  requireAuth,
+} from "./src/middleware/auth.ts";
+import { adminAuth } from "./src/lib/firebase-admin.ts";
+import {
+  clampString,
+  ConcurrencyGuard,
+  createRateLimitMiddleware,
+  getClientIp,
+  isAllowedWebSocketOrigin,
+  sanitizeStringArray,
+  SlidingWindowLimiter,
+} from "./src/middleware/rateLimit.ts";
 import { getOrCreateUser, updateUserWeeklyGoal } from "./src/db/users.ts";
 import {
   deleteSavedPhraseRecord,
@@ -99,6 +113,7 @@ interface LiveStartConfig {
   dialectDirective?: string;
   level: string;
   voiceName: string;
+  scenarioId?: string;
   scenarioTitle: string;
   scenarioPrompt: string;
   partnerName: string;
@@ -108,6 +123,61 @@ interface LiveStartConfig {
   goals: string[];
 }
 
+// Server-authoritative prompts for built-in curated scenarios
+const BUILT_IN_SCENARIO_PROMPTS: Record<string, string> = {
+  "madrid-cafe":
+    "You are Mateo, a friendly barista behind a busy neighborhood espresso bar in Madrid. Welcome the customer, ask what they would like to drink, suggest a fresh pastry, and chat briefly about the morning weather or neighborhood.",
+  "tokyo-counter":
+    "You are Kenji, the warm, observant owner-chef of a small counter eatery in Shimokitazawa, Tokyo. Greet the guest, explain two seasonal specials, check for any dietary preferences, and ask where they are visiting from or how their week is going.",
+  "paris-bookshop":
+    "You are Claire, a thoughtful independent bookseller on the Left Bank in Paris. Help the visitor find a novel or essay collection by asking what moods, authors, or themes they enjoy, and share a brief opinion on contemporary literature.",
+  "seoul-cafe":
+    "You are Minji, the warm host and barista of an intimate vinyl listening café in Seongsu-dong, Seoul. Greet the guest, recommend a hand-drip coffee or seasonal ade, talk briefly about the vinyl album currently playing, and ask what music or neighborhood spots they enjoy.",
+  "taipei-teahouse":
+    "You are Wei-Lin, a warm and unhurried tea host at a wooden tea counter in Dadaocheng, Taipei. Welcome the guest out of the light rain, introduce two oolong or roasted teas, ask whether they prefer floral or toasty flavors, and chat briefly about tea snacks or evening plans.",
+  "lisbon-bakery":
+    "You are Rafael, an upbeat, warm neighborhood baker and barista at a sunlit corner padaria. Welcome the guest, tell them that warm pastel de nata and pão de queijo just came out of the oven, take their coffee order, and make cheerful small talk about the morning.",
+  "berlin-studio":
+    "You are Lukas, a pragmatic and collaborative design lead in a Berlin studio. You are meeting a teammate for a weekly project sync. Ask for an update on their current deliverable, raise one polite concern about the upcoming deadline, and collaborate on a trade-off.",
+  "milan-apartment":
+    "You are Sofia, showing a sunlit two-room apartment in Brera, Milan to a prospective tenant. Describe the neighborhood, answer questions about rent, utilities, heating, and internet, and ask about the tenant's plans and preferred move-in date.",
+  "open-conversation":
+    "You are Elena, an engaging, curious native conversation partner. Have a natural, unscripted dialogue on whatever topic the learner brings up. Ask thoughtful follow-up questions and keep turns concise so the learner speaks at least half the time.",
+};
+
+class BoundedTtlCache<T> {
+  private map = new Map<string, { value: T; expiresAt: number }>();
+  constructor(private readonly maxEntries: number, private readonly ttlMs: number) {}
+
+  get(key: string): T | undefined {
+    const entry = this.map.get(key);
+    if (!entry) return undefined;
+    if (Date.now() > entry.expiresAt) {
+      this.map.delete(key);
+      return undefined;
+    }
+    // Refresh recency for LRU eviction
+    this.map.delete(key);
+    this.map.set(key, entry);
+    return entry.value;
+  }
+
+  set(key: string, value: T): void {
+    if (this.map.has(key)) {
+      this.map.delete(key);
+    } else if (this.map.size >= this.maxEntries) {
+      const oldestKey = this.map.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.map.delete(oldestKey);
+      }
+    }
+    this.map.set(key, { value, expiresAt: Date.now() + this.ttlMs });
+  }
+}
+
+const wordLookupCache = new BoundedTtlCache<Record<string, unknown>>(500, 24 * 60 * 60_000);
+const turnTranslationCache = new BoundedTtlCache<Record<string, unknown>>(500, 24 * 60 * 60_000);
+
 function buildPartnerSystemInstruction(cfg: LiveStartConfig): string {
   const paceDirective =
     cfg.speakingPace === "slow"
@@ -115,6 +185,11 @@ function buildPartnerSystemInstruction(cfg: LiveStartConfig): string {
       : cfg.speakingPace === "brisk"
       ? "Speak at an authentic, brisk native speed with natural contractions and colloquialisms."
       : "Speak at a natural, comfortable conversational speed suitable for the learner's level.";
+
+  const levelDirective =
+    cfg.level === "A1"
+      ? "Learner CEFR Proficiency: A1 (Beginner). Use very short, warm, high-frequency sentences (1–2 brief sentences max) and speak clearly. If the learner mixes in an English word when stuck, understand them warmly and naturally model the target-language word in your reply without lecturing."
+      : `Learner CEFR Proficiency: ${cfg.level}. Match your vocabulary and sentence complexity to ${cfg.level} so the learner feels stretched yet supported.`;
 
   const correctionDirective =
     cfg.correctionStyle === "active"
@@ -132,11 +207,13 @@ function buildPartnerSystemInstruction(cfg: LiveStartConfig): string {
 
   return [
     `You are ${cfg.partnerName}, a ${cfg.partnerRole}.`,
-    `Language: Speak strictly in ${cfg.languageName} (${cfg.languageNative}) unless the learner explicitly asks for brief help in English.`,
+    cfg.level === "A1"
+      ? `Language: Speak primarily in simple ${cfg.languageName} (${cfg.languageNative}), welcoming occasional English rescue words from the beginner learner.`
+      : `Language: Speak strictly in ${cfg.languageName} (${cfg.languageNative}) unless the learner explicitly asks for brief help in English.`,
     cfg.dialectDirective
       ? `Regional Variety (${cfg.dialectLabel || "Local"}): ${cfg.dialectDirective}`
       : "",
-    `Learner CEFR Proficiency: ${cfg.level}. Match your vocabulary and sentence complexity to ${cfg.level} so the learner feels stretched yet supported.`,
+    levelDirective,
     `Scenario: ${cfg.scenarioTitle}. ${cfg.scenarioPrompt}`,
     paceDirective,
     correctionDirective,
@@ -149,15 +226,43 @@ function buildPartnerSystemInstruction(cfg: LiveStartConfig): string {
 
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: "2mb" }));
+  app.set("trust proxy", 1);
+  app.use(express.json({ limit: "512kb" }));
+
+  // Server-side sliding-window rate limiters & WebSocket concurrency guards
+  const rateLimiter = new SlidingWindowLimiter();
+  const liveConcurrency = new ConcurrencyGuard();
+
+  const coachRateLimit = createRateLimitMiddleware(rateLimiter, {
+    windowMs: 60_000,
+    maxGuest: 30,
+    maxAuthenticated: 90,
+    label: "coaching",
+  });
+  const chatRateLimit = createRateLimitMiddleware(rateLimiter, {
+    windowMs: 60_000,
+    maxGuest: 20,
+    maxAuthenticated: 60,
+    label: "tutor chat",
+  });
+  const accountRateLimit = createRateLimitMiddleware(rateLimiter, {
+    windowMs: 60_000,
+    maxGuest: 30,
+    maxAuthenticated: 120,
+    label: "account sync",
+  });
 
   // Health check
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, hasApiKey: Boolean(process.env.GEMINI_API_KEY) });
   });
 
+  app.use("/api/me", requireAuth, accountRateLimit);
+  app.use("/api/coach", attachOptionalAuth, coachRateLimit);
+  app.use("/api/chat", attachOptionalAuth, chatRateLimit);
+
   // --- Authenticated User Data Routes (Cloud SQL PostgreSQL) ---
-  app.get("/api/me/state", requireAuth, async (req: AuthRequest, res) => {
+  app.get("/api/me/state", async (req: AuthRequest, res) => {
     try {
       const uid = req.user!.uid;
       const email = req.user!.email || `${uid}@users.parlo.local`;
@@ -181,7 +286,7 @@ async function startServer() {
     }
   });
 
-  app.put("/api/me/goal", requireAuth, async (req: AuthRequest, res) => {
+  app.put("/api/me/goal", async (req: AuthRequest, res) => {
     try {
       const { weeklySessionGoal } = (req.body ?? {}) as { weeklySessionGoal?: number };
       if (
@@ -202,12 +307,36 @@ async function startServer() {
     }
   });
 
-  app.post("/api/me/sessions", requireAuth, async (req: AuthRequest, res) => {
+  app.post("/api/me/sessions", async (req: AuthRequest, res) => {
     try {
-      const record = req.body as PracticeSessionRecord;
-      if (!record?.id || !Array.isArray(record.transcript)) {
+      const rawRecord = req.body as Partial<PracticeSessionRecord>;
+      const id = clampString(rawRecord?.id, 128);
+      if (!id || !Array.isArray(rawRecord?.transcript) || rawRecord.transcript.length > 400) {
         return res.status(400).json({ error: "Valid session record is required." });
       }
+      const record: PracticeSessionRecord = {
+        id,
+        date: typeof rawRecord.date === "number" && Number.isFinite(rawRecord.date) ? rawRecord.date : Date.now(),
+        languageCode: clampString(rawRecord.languageCode, 16, "es"),
+        level: (["A2", "B1", "B2", "C1"].includes(String(rawRecord.level)) ? rawRecord.level : "B1") as PracticeSessionRecord["level"],
+        scenarioTitle: clampString(rawRecord.scenarioTitle, 160, "Conversation"),
+        partnerName: clampString(rawRecord.partnerName, 80, "Partner"),
+        durationSeconds: Math.max(1, Math.min(7200, Math.round(Number(rawRecord.durationSeconds) || 1))),
+        userTurnsCount: Math.max(0, Math.min(400, Math.round(Number(rawRecord.userTurnsCount) || 0))),
+        partnerTurnsCount: Math.max(0, Math.min(400, Math.round(Number(rawRecord.partnerTurnsCount) || 0))),
+        goalsCompleted: Math.max(0, Math.min(20, Math.round(Number(rawRecord.goalsCompleted) || 0))),
+        goalsTotal: Math.max(0, Math.min(20, Math.round(Number(rawRecord.goalsTotal) || 0))),
+        transcript: rawRecord.transcript
+          .filter(
+            (t): t is { role: "user" | "partner"; text: string } =>
+              Boolean(t) &&
+              (t.role === "user" || t.role === "partner") &&
+              typeof t.text === "string"
+          )
+          .slice(0, 400)
+          .map((t) => ({ role: t.role, text: clampString(t.text, 2000) })),
+        debrief: rawRecord.debrief,
+      };
       const user = await getOrCreateUser(
         req.user!.uid,
         req.user!.email || `${req.user!.uid}@users.parlo.local`,
@@ -224,7 +353,6 @@ async function startServer() {
 
   app.put(
     "/api/me/sessions/:clientId/debrief",
-    requireAuth,
     async (req: AuthRequest, res) => {
       try {
         const debrief = req.body as DebriefReport;
@@ -250,12 +378,28 @@ async function startServer() {
     }
   );
 
-  app.post("/api/me/phrases", requireAuth, async (req: AuthRequest, res) => {
+  app.post("/api/me/phrases", async (req: AuthRequest, res) => {
     try {
-      const phrase = req.body as SavedPhrase;
-      if (!phrase?.id || !phrase.phrase) {
+      const rawPhrase = req.body as Partial<SavedPhrase>;
+      const id = clampString(rawPhrase?.id, 128);
+      const phraseText = clampString(rawPhrase?.phrase, 500);
+      if (!id || !phraseText) {
         return res.status(400).json({ error: "Valid phrase payload is required." });
       }
+      const phrase: SavedPhrase = {
+        id,
+        phrase: phraseText,
+        translation: clampString(rawPhrase?.translation, 500, ""),
+        reading: clampString(rawPhrase?.reading, 300) || undefined,
+        languageCode: clampString(rawPhrase?.languageCode, 16, "es"),
+        scenarioTitle: clampString(rawPhrase?.scenarioTitle, 160, "Personal Entry"),
+        note: clampString(rawPhrase?.note, 600) || undefined,
+        mastered: Boolean(rawPhrase?.mastered),
+        createdAt:
+          typeof rawPhrase?.createdAt === "number" && Number.isFinite(rawPhrase.createdAt)
+            ? rawPhrase.createdAt
+            : Date.now(),
+      };
       const user = await getOrCreateUser(
         req.user!.uid,
         req.user!.email || `${req.user!.uid}@users.parlo.local`,
@@ -272,7 +416,6 @@ async function startServer() {
 
   app.patch(
     "/api/me/phrases/:clientId",
-    requireAuth,
     async (req: AuthRequest, res) => {
       try {
         const { mastered } = req.body as { mastered?: boolean };
@@ -300,7 +443,6 @@ async function startServer() {
 
   app.delete(
     "/api/me/phrases/:clientId",
-    requireAuth,
     async (req: AuthRequest, res) => {
       try {
         const user = await getOrCreateUser(
@@ -318,12 +460,40 @@ async function startServer() {
     }
   );
 
-  app.post("/api/me/scenarios", requireAuth, async (req: AuthRequest, res) => {
+  app.post("/api/me/scenarios", async (req: AuthRequest, res) => {
     try {
-      const scenario = req.body as Scenario;
-      if (!scenario?.id || !scenario.title) {
+      const rawSc = req.body as Partial<Scenario>;
+      const id = clampString(rawSc?.id, 128);
+      const title = clampString(rawSc?.title, 140);
+      if (!id || !title) {
         return res.status(400).json({ error: "Valid scenario payload is required." });
       }
+      const scenario: Scenario = {
+        id,
+        title,
+        city: clampString(rawSc?.city, 80, "Custom"),
+        category: clampString(rawSc?.category, 60, "Custom"),
+        durationLabel: clampString(rawSc?.durationLabel, 40, "Flexible"),
+        defaultLanguageCode: clampString(rawSc?.defaultLanguageCode, 16, "es"),
+        recommendedLevel: (["A1", "A2", "B1", "B2", "C1"].includes(String(rawSc?.recommendedLevel))
+          ? rawSc?.recommendedLevel
+          : "B1") as Scenario["recommendedLevel"],
+        partnerName: clampString(rawSc?.partnerName, 80, "Partner"),
+        partnerRole: clampString(rawSc?.partnerRole, 120, "Conversation Partner"),
+        defaultVoice: (["Zephyr", "Kore", "Puck", "Charon", "Fenrir"].includes(String(rawSc?.defaultVoice))
+          ? rawSc?.defaultVoice
+          : "Zephyr") as Scenario["defaultVoice"],
+        fallbackGradient: clampString(
+          rawSc?.fallbackGradient,
+          120,
+          "from-slate-800 via-blue-950 to-slate-900"
+        ),
+        summary: clampString(rawSc?.summary, 400, ""),
+        promptContext: clampString(rawSc?.promptContext, 1200, ""),
+        goals: sanitizeStringArray(rawSc?.goals, 8, 180),
+        starterPhrases: {},
+        isCustom: true,
+      };
       const user = await getOrCreateUser(
         req.user!.uid,
         req.user!.email || `${req.user!.uid}@users.parlo.local`,
@@ -341,32 +511,36 @@ async function startServer() {
   // 1. Live Turn Coaching & Grammar Feedback
   app.post("/api/coach/feedback", async (req, res) => {
     try {
-      const {
-        utterance,
-        languageName,
-        dialectLabel,
-        level,
-        scenarioTitle,
-        recentTurns = [],
-        goals = [],
-      } = (req.body ?? {}) as {
-        utterance: string;
-        languageName: string;
+      const rawBody = (req.body ?? {}) as {
+        utterance?: string;
+        languageName?: string;
         dialectLabel?: string;
-        level: string;
-        scenarioTitle: string;
+        dialectDirective?: string;
+        level?: string;
+        scenarioTitle?: string;
         recentTurns?: { role: string; text: string }[];
         goals?: string[];
       };
 
-      if (!utterance || !utterance.trim()) {
+      const utterance = clampString(rawBody.utterance, 1200);
+      if (!utterance) {
         return res.status(400).json({ error: "Utterance is required." });
       }
+      const languageName = clampString(rawBody.languageName, 40, "Spanish");
+      const dialectLabel = clampString(rawBody.dialectLabel, 80);
+      const dialectDirective = clampString(rawBody.dialectDirective, 260);
+      const level = clampString(rawBody.level, 8, "B1");
+      const scenarioTitle = clampString(rawBody.scenarioTitle, 140, "Conversation");
+      const recentTurns = Array.isArray(rawBody.recentTurns) ? rawBody.recentTurns : [];
+      const goals = sanitizeStringArray(rawBody.goals, 8, 180);
 
       const ai = getGeminiClient();
       const contextText = recentTurns
         .slice(-6)
-        .map((t) => `${t.role === "user" ? "Learner" : "Partner"}: ${t.text}`)
+        .map(
+          (t) =>
+            `${t.role === "user" ? "Learner" : "Partner"}: ${clampString(t.text, 500)}`
+        )
         .join("\n");
 
       const goalsPrompt =
@@ -376,9 +550,13 @@ async function startServer() {
               .join("\n")}`
           : "No scenario goals provided.";
 
+      const dialectPromptLine = dialectLabel
+        ? ` (${dialectLabel} regional style${dialectDirective ? `: ${dialectDirective}` : ""})`
+        : "";
+
       const response = await ai.models.generateContent({
         model: "gemini-4-hydrogen",
-        contents: `Target language: ${languageName}${dialectLabel ? ` (${dialectLabel} regional style)` : ""} (CEFR ${level})
+        contents: `Target language: ${languageName}${dialectPromptLine} (CEFR ${level})
 Scenario: ${scenarioTitle}
 Recent conversation:
 ${contextText}
@@ -466,12 +644,21 @@ Evaluate the learner's utterance carefully. If it is already natural and accurat
   // 2. Turn Translation & Breakdown
   app.post("/api/coach/translate", async (req, res) => {
     try {
-      const { text, languageName } = (req.body ?? {}) as {
-        text: string;
-        languageName: string;
+      const rawBody = (req.body ?? {}) as {
+        text?: string;
+        languageName?: string;
       };
-      if (!text || !text.trim()) {
+      const text = clampString(rawBody.text, 1500);
+      const languageName = clampString(rawBody.languageName, 40, "Spanish");
+      if (!text) {
         return res.status(400).json({ error: "Text is required." });
+      }
+
+      const cacheKey = `${languageName.toLowerCase()}::${text.toLowerCase()}`;
+      const cached = turnTranslationCache.get(cacheKey);
+      if (cached) {
+        res.setHeader("X-Parlo-Cache", "HIT");
+        return res.json(cached);
       }
 
       const ai = getGeminiClient();
@@ -508,6 +695,8 @@ Evaluate the learner's utterance carefully. If it is already natural and accurat
         response.text,
         "Translation returned an invalid format. Please try again."
       );
+      turnTranslationCache.set(cacheKey, parsed);
+      res.setHeader("X-Parlo-Cache", "MISS");
       res.json(parsed);
     } catch (err) {
       const { status, message } = formatApiError(err);
@@ -518,34 +707,42 @@ Evaluate the learner's utterance carefully. If it is already natural and accurat
   // 3. Contextual Reply Hints
   app.post("/api/coach/hints", async (req, res) => {
     try {
-      const {
-        languageName,
-        dialectLabel,
-        level,
-        scenarioTitle,
-        scenarioPrompt,
-        recentTurns = [],
-      } = (req.body ?? {}) as {
-        languageName: string;
+      const rawBody = (req.body ?? {}) as {
+        languageName?: string;
         dialectLabel?: string;
-        level: string;
-        scenarioTitle: string;
-        scenarioPrompt: string;
+        dialectDirective?: string;
+        level?: string;
+        scenarioTitle?: string;
+        scenarioPrompt?: string;
         recentTurns?: { role: string; text: string }[];
       };
+      const languageName = clampString(rawBody.languageName, 40, "Spanish");
+      const dialectLabel = clampString(rawBody.dialectLabel, 80);
+      const dialectDirective = clampString(rawBody.dialectDirective, 260);
+      const level = clampString(rawBody.level, 8, "B1");
+      const scenarioTitle = clampString(rawBody.scenarioTitle, 140, "Conversation");
+      const scenarioPrompt = clampString(rawBody.scenarioPrompt, 800, "");
+      const recentTurns = Array.isArray(rawBody.recentTurns) ? rawBody.recentTurns : [];
 
       const ai = getGeminiClient();
       const transcriptText =
         recentTurns.length > 0
           ? recentTurns
               .slice(-6)
-              .map((t) => `${t.role === "user" ? "Learner" : "Partner"}: ${t.text}`)
+              .map(
+                (t) =>
+                  `${t.role === "user" ? "Learner" : "Partner"}: ${clampString(t.text, 500)}`
+              )
               .join("\n")
           : "The conversation is just starting.";
 
+      const dialectCue = dialectLabel
+        ? ` (${dialectLabel} variety${dialectDirective ? `: ${dialectDirective}` : ""})`
+        : "";
+
       const response = await ai.models.generateContent({
         model: "gemini-4-hydrogen",
-        contents: `Generate 3 natural, distinct reply options the learner can say next in ${languageName}${dialectLabel ? ` (${dialectLabel} variety)` : ""} (CEFR ${level}).
+        contents: `Generate 3 natural, distinct reply options the learner can say next in ${languageName}${dialectCue} (CEFR ${level}).
 Scenario: ${scenarioTitle} — ${scenarioPrompt}
 Conversation so far:
 ${transcriptText}
@@ -603,12 +800,16 @@ Make each option fit a distinct register or direction (e.g., Polite, Casual, Cur
   // 4. Post-Session Debrief Report
   app.post("/api/coach/debrief", async (req, res) => {
     try {
-      const { languageName, level, scenarioTitle, transcript = [] } = (req.body ?? {}) as {
-        languageName: string;
-        level: string;
-        scenarioTitle: string;
-        transcript: { role: string; text: string }[];
+      const rawBody = (req.body ?? {}) as {
+        languageName?: string;
+        level?: string;
+        scenarioTitle?: string;
+        transcript?: { role: string; text: string }[];
       };
+      const languageName = clampString(rawBody.languageName, 40, "Spanish");
+      const level = clampString(rawBody.level, 8, "B1");
+      const scenarioTitle = clampString(rawBody.scenarioTitle, 140, "Conversation");
+      const transcript = Array.isArray(rawBody.transcript) ? rawBody.transcript.slice(0, 120) : [];
 
       if (!transcript.length) {
         return res
@@ -618,7 +819,10 @@ Make each option fit a distinct register or direction (e.g., Polite, Casual, Cur
 
       const ai = getGeminiClient();
       const formatted = transcript
-        .map((t) => `${t.role === "user" ? "Learner" : "Partner"}: ${t.text}`)
+        .map(
+          (t) =>
+            `${t.role === "user" ? "Learner" : "Partner"}: ${clampString(t.text, 800)}`
+        )
         .join("\n");
 
       const response = await ai.models.generateContent({
@@ -707,13 +911,7 @@ Provide a clear, encouraging, concrete coaching debrief in English with specific
   // 5. Click-Any-Word Cultural Dictionary Breakdown
   app.post("/api/coach/word", async (req, res) => {
     try {
-      const {
-        word,
-        sentenceContext = "",
-        languageName = "Spanish",
-        dialectLabel = "",
-        level = "B1",
-      } = (req.body ?? {}) as {
+      const rawBody = (req.body ?? {}) as {
         word?: string;
         sentenceContext?: string;
         languageName?: string;
@@ -721,18 +919,34 @@ Provide a clear, encouraging, concrete coaching debrief in English with specific
         level?: string;
       };
 
-      const trimmedWord = typeof word === "string" ? word.trim() : "";
+      const trimmedWord = clampString(rawBody.word, 80);
       if (!trimmedWord) {
         return res.status(400).json({ error: "A word is required for lookup." });
+      }
+      const sentenceContext = clampString(rawBody.sentenceContext, 500, trimmedWord);
+      const languageName = clampString(rawBody.languageName, 40, "Spanish");
+      const dialectLabel = clampString(rawBody.dialectLabel, 80);
+      const level = clampString(rawBody.level, 8, "B1");
+
+      const wordCacheKey = [
+        languageName.toLowerCase(),
+        dialectLabel.toLowerCase(),
+        level.toUpperCase(),
+        trimmedWord.toLowerCase(),
+      ].join("::");
+      const cachedWord = wordLookupCache.get(wordCacheKey);
+      if (cachedWord) {
+        res.setHeader("X-Parlo-Cache", "HIT");
+        return res.json(cachedWord);
       }
 
       const ai = getGeminiClient();
       const response = await ai.models.generateContent({
         model: "gemini-4-hydrogen",
         contents: `Analyze the target word "${trimmedWord}" in ${languageName}${dialectLabel ? ` (${dialectLabel} regional usage)` : ""} for a CEFR ${level} learner.
-Sentence context: "${sentenceContext || trimmedWord}"
+Sentence context: "${sentenceContext}"
 
-Return its dictionary base/root form, part of speech, pronunciation/romanization reading (if non-Latin script or tricky stress, otherwise empty string), crisp contextual English meaning, a 1-sentence cultural/register nuance note, and one short natural example sentence in ${languageName}.`,
+Return its dictionary base/root form, part of speech, pronunciation/romanization reading (if non-Latin script or tricky stress, otherwise empty string), crisp contextual English meaning, a 1-sentence cultural/register nuance note, one short natural example sentence in ${languageName}, and an English translation of that example sentence.`,
         config: {
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           responseMimeType: "application/json",
@@ -746,6 +960,7 @@ Return its dictionary base/root form, part of speech, pronunciation/romanization
               meaning: { type: Type.STRING },
               dialectNote: { type: Type.STRING },
               example: { type: Type.STRING },
+              exampleTranslation: { type: Type.STRING },
             },
             required: [
               "word",
@@ -754,6 +969,7 @@ Return its dictionary base/root form, part of speech, pronunciation/romanization
               "meaning",
               "dialectNote",
               "example",
+              "exampleTranslation",
             ],
           },
         },
@@ -763,6 +979,8 @@ Return its dictionary base/root form, part of speech, pronunciation/romanization
         response.text,
         "Word breakdown returned an invalid format. Please try again."
       );
+      wordLookupCache.set(wordCacheKey, parsed);
+      res.setHeader("X-Parlo-Cache", "MISS");
       res.json(parsed);
     } catch (err) {
       const { status, message } = formatApiError(err);
@@ -801,24 +1019,32 @@ Return its dictionary base/root form, part of speech, pronunciation/romanization
         scenarioTitle?: string;
       };
 
-      const trimmedMessage = typeof message === "string" ? message.trim() : "";
+      const trimmedMessage = clampString(message, 2000);
       if (!trimmedMessage) {
         return res.status(400).json({ error: "A message is required." });
       }
 
-      const dialectSuffix = dialectDirective
-        ? `\nRegional style (${dialectLabel || "Local"}): ${dialectDirective}`
+      const safeLanguageName = clampString(languageName, 40, "Spanish");
+      const safeLanguageNative = clampString(languageNative, 40, "Español");
+      const safeDialectLabel = clampString(dialectLabel, 80);
+      const safeDialectDirective = clampString(dialectDirective, 260);
+      const safeLevel = clampString(level, 8, "B1");
+      const safeAtelier = clampString(cultureAtelier, 80, "Madrid Atelier");
+      const safeScenarioTitle = clampString(scenarioTitle, 140, "Everyday Conversation");
+
+      const dialectSuffix = safeDialectDirective
+        ? `\nRegional style (${safeDialectLabel || "Local"}): ${safeDialectDirective}`
         : "";
 
       const roleInstructions: Record<string, string> = {
-        conversation: `You are Parlo's warm, articulate native-speaking conversation partner for ${languageName} (${languageNative}), grounded in the "${cultureAtelier}" aesthetic and the scenario "${scenarioTitle}".${dialectSuffix}
-Respond primarily in natural ${languageName} calibrated to CEFR ${level}. Keep turns concise (2-4 sentences) and end with a natural follow-up question to keep the dialogue flowing. If the learner writes in English or seems stuck, gently bridge back into ${languageName} with a brief English gloss in parentheses only where genuinely helpful. For Japanese, Mandarin, or Korean, include a brief pronunciation reading in parentheses for uncommon words.`,
-        grammar: `You are Parlo's precision ${languageName} (${languageNative}) grammar and phrasing coach for a CEFR ${level} learner practicing "${scenarioTitle}".${dialectSuffix}
-Explain nuances clearly in concise English while quoting authentic ${languageName} examples. When the learner shares a sentence, highlight: (1) a more natural native phrasing, (2) why it sounds better (register, idiom, or tense), and (3) one quick parallel example they can reuse right away. Keep answers scannable and encouraging.`,
-        culture: `You are Parlo's cultural etiquette and local life concierge for ${languageName} (${languageNative}) — "${cultureAtelier}".${dialectSuffix}
-Share vivid, practical insights on social etiquette, politeness registers, regional expressions, cafe/table customs, and unspoken cultural cues connected to "${scenarioTitle}" and CEFR ${level} communication. Always include 1-2 authentic ${languageName} expressions with English translations so the learner can sound effortlessly respectful and local.`,
-        phrases: `You are Parlo's phrase architect and pronunciation mentor for ${languageName} (${languageNative}) at CEFR ${level}.${dialectSuffix}
-Give ready-to-speak phrases tailored to "${scenarioTitle}" or whatever the learner asks for. For each phrase, provide: the exact ${languageName} expression, pronunciation/reading guidance (especially for Japanese, Mandarin, Korean, or tricky liaisons), a natural English translation, and whether it fits casual or polite settings. Keep responses crisp and practical.`,
+        conversation: `You are Parlo's warm, articulate native-speaking conversation partner for ${safeLanguageName} (${safeLanguageNative}), grounded in the "${safeAtelier}" aesthetic and the scenario "${safeScenarioTitle}".${dialectSuffix}
+Respond primarily in natural ${safeLanguageName} calibrated to CEFR ${safeLevel}. Keep turns concise (2-4 sentences) and end with a natural follow-up question to keep the dialogue flowing. If the learner writes in English or seems stuck, gently bridge back into ${safeLanguageName} with a brief English gloss in parentheses only where genuinely helpful. For Japanese, Mandarin, or Korean, include a brief pronunciation reading in parentheses for uncommon words.`,
+        grammar: `You are Parlo's precision ${safeLanguageName} (${safeLanguageNative}) grammar and phrasing coach for a CEFR ${safeLevel} learner practicing "${safeScenarioTitle}".${dialectSuffix}
+Explain nuances clearly in concise English while quoting authentic ${safeLanguageName} examples. When the learner shares a sentence, highlight: (1) a more natural native phrasing, (2) why it sounds better (register, idiom, or tense), and (3) one quick parallel example they can reuse right away. Keep answers scannable and encouraging.`,
+        culture: `You are Parlo's cultural etiquette and local life concierge for ${safeLanguageName} (${safeLanguageNative}) — "${safeAtelier}".${dialectSuffix}
+Share vivid, practical insights on social etiquette, politeness registers, regional expressions, cafe/table customs, and unspoken cultural cues connected to "${safeScenarioTitle}" and CEFR ${safeLevel} communication. Always include 1-2 authentic ${safeLanguageName} expressions with English translations so the learner can sound effortlessly respectful and local.`,
+        phrases: `You are Parlo's phrase architect and pronunciation mentor for ${safeLanguageName} (${safeLanguageNative}) at CEFR ${safeLevel}.${dialectSuffix}
+Give ready-to-speak phrases tailored to "${safeScenarioTitle}" or whatever the learner asks for. For each phrase, provide: the exact ${safeLanguageName} expression, pronunciation/reading guidance (especially for Japanese, Mandarin, Korean, or tricky liaisons), a natural English translation, and whether it fits casual or polite settings. Keep responses crisp and practical.`,
       };
 
       const systemInstruction =
@@ -836,7 +1062,7 @@ Give ready-to-speak phrases tailored to "${scenarioTitle}" or whatever the learn
             .slice(-24)
             .map((item) => ({
               role: item.role,
-              parts: [{ text: item.text.trim() }],
+              parts: [{ text: clampString(item.text, 2000) }],
             }))
         : [];
 
@@ -888,22 +1114,72 @@ Give ready-to-speak phrases tailored to "${scenarioTitle}" or whatever the learn
   }
 
   const httpServer = http.createServer(app);
-  const wss = new WebSocketServer({ noServer: true });
-
-  httpServer.on("upgrade", (request, socket, head) => {
-    const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
-    if (url.pathname === "/api/live") {
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit("connection", ws, request);
-      });
-    } else {
-      socket.destroy();
-    }
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: 256 * 1024, // 256 KB hard cap per WebSocket frame
   });
 
-  wss.on("connection", (clientWs: WebSocket) => {
+  const LIVE_MAX_SESSION_MS = 15 * 60 * 1000; // 15-minute session cap
+  const LIVE_IDLE_TIMEOUT_MS = 3 * 60 * 1000; // 3-minute idle timeout
+  const LIVE_MAX_CONCURRENT_PER_CLIENT = 2;
+
+  httpServer.on("upgrade", (request, socket, head) => {
+    const url = new URL(request.url ?? "/", `http://${request.headers.host || "localhost"}`);
+    if (url.pathname !== "/api/live") {
+      socket.destroy();
+      return;
+    }
+
+    if (!isAllowedWebSocketOrigin(request.headers.origin, request.headers.host)) {
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit("connection", ws, request);
+    });
+  });
+
+  wss.on("connection", (clientWs: WebSocket, request: http.IncomingMessage) => {
+    const clientIp = getClientIp(request);
+    let concurrencyKey = `live:ip:${clientIp}`;
+    if (!liveConcurrency.acquire(concurrencyKey, LIVE_MAX_CONCURRENT_PER_CLIENT)) {
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.send(
+          JSON.stringify({
+            type: "error",
+            message:
+              "You already have active voice sessions open. Close another tab or end your current session first.",
+          })
+        );
+      }
+      clientWs.close(1008, "Concurrent live session limit reached");
+      return;
+    }
+
     let liveSession: Awaited<ReturnType<GoogleGenAI["live"]["connect"]>> | null = null;
     let isClosing = false;
+    let releasedConcurrency = false;
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    let maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
+    let audioFramesInWindow = 0;
+    let audioWindowStart = Date.now();
+
+    const releaseResources = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+      if (maxDurationTimer) {
+        clearTimeout(maxDurationTimer);
+        maxDurationTimer = null;
+      }
+      if (!releasedConcurrency) {
+        releasedConcurrency = true;
+        liveConcurrency.release(concurrencyKey);
+      }
+    };
 
     const safeSend = (payload: Record<string, unknown>) => {
       if (clientWs.readyState === WebSocket.OPEN) {
@@ -922,9 +1198,30 @@ Give ready-to-speak phrases tailored to "${scenarioTitle}" or whatever the learn
       }
     };
 
+    const resetIdleTimer = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        isClosing = true;
+        closeLiveSession();
+        safeSend({
+          type: "error",
+          message:
+            "Voice session timed out after 3 minutes of inactivity. Your transcript has been preserved.",
+        });
+        try {
+          clientWs.close(1000, "Idle timeout");
+        } catch {
+          // ignore
+        }
+      }, LIVE_IDLE_TIMEOUT_MS);
+    };
+
+    resetIdleTimer();
+
     clientWs.on("message", async (raw) => {
       let msg: {
         type?: string;
+        authToken?: string;
         config?: LiveStartConfig;
         data?: string;
         text?: string;
@@ -938,12 +1235,90 @@ Give ready-to-speak phrases tailored to "${scenarioTitle}" or whatever the learn
       if (msg.type === "start" && msg.config) {
         isClosing = false;
         closeLiveSession();
+
+        // Optional Firebase token in encrypted WS start payload (never in URL query string)
+        let verifiedUid: string | null = null;
+        if (typeof msg.authToken === "string" && msg.authToken.trim().length > 0) {
+          try {
+            const decoded = await adminAuth.verifyIdToken(msg.authToken.trim());
+            verifiedUid = decoded.uid;
+          } catch {
+            // Fall back to guest IP quota
+          }
+        }
+
+        const startLimitKey = verifiedUid
+          ? `live-start:uid:${verifiedUid}`
+          : `live-start:ip:${clientIp}`;
+        const startLimit = rateLimiter.check(
+          startLimitKey,
+          verifiedUid ? 30 : 12,
+          10 * 60_000
+        );
+        if (!startLimit.allowed) {
+          safeSend({
+            type: "error",
+            message: verifiedUid
+              ? `Voice session start limit reached. Please wait ${startLimit.retryAfterSeconds}s before starting again.`
+              : `Guest voice preview limit reached. Wait ${startLimit.retryAfterSeconds}s or sign in with Google for higher limits.`,
+          });
+          return;
+        }
+
+        const rawScenarioId = clampString(msg.config.scenarioId, 80);
+        const authoritativePrompt =
+          rawScenarioId && BUILT_IN_SCENARIO_PROMPTS[rawScenarioId]
+            ? BUILT_IN_SCENARIO_PROMPTS[rawScenarioId]
+            : clampString(msg.config.scenarioPrompt, 1200, "");
+
+        const sanitizedConfig: LiveStartConfig = {
+          languageName: clampString(msg.config.languageName, 40, "Spanish"),
+          languageNative: clampString(msg.config.languageNative, 40, "Español"),
+          dialectLabel: clampString(msg.config.dialectLabel, 80) || undefined,
+          dialectDirective:
+            clampString(msg.config.dialectDirective, 260) || undefined,
+          level: ["A1", "A2", "B1", "B2", "C1"].includes(msg.config.level)
+            ? msg.config.level
+            : "B1",
+          voiceName: msg.config.voiceName,
+          scenarioId: rawScenarioId || undefined,
+          scenarioTitle: clampString(
+            msg.config.scenarioTitle,
+            140,
+            "Everyday Conversation"
+          ),
+          scenarioPrompt: authoritativePrompt,
+          partnerName: clampString(msg.config.partnerName, 60, "Partner"),
+          partnerRole: clampString(
+            msg.config.partnerRole,
+            100,
+            "Conversation Partner"
+          ),
+          correctionStyle: ["gentle", "active", "immersive"].includes(
+            msg.config.correctionStyle
+          )
+            ? msg.config.correctionStyle
+            : "gentle",
+          speakingPace: ["slow", "natural", "brisk"].includes(
+            msg.config.speakingPace
+          )
+            ? msg.config.speakingPace
+            : "natural",
+          goals: sanitizeStringArray(msg.config.goals, 8, 180),
+        };
+
         try {
           const ai = getGeminiClient();
-          const systemInstruction = buildPartnerSystemInstruction(msg.config);
-          const allowedVoices = new Set(["Zephyr", "Kore", "Puck", "Charon", "Fenrir"]);
-          const voiceName = allowedVoices.has(msg.config.voiceName)
-            ? msg.config.voiceName
+          const systemInstruction = buildPartnerSystemInstruction(sanitizedConfig);
+          const allowedVoices = new Set([
+            "Zephyr",
+            "Kore",
+            "Puck",
+            "Charon",
+            "Fenrir",
+          ]);
+          const voiceName = allowedVoices.has(sanitizedConfig.voiceName)
+            ? sanitizedConfig.voiceName
             : "Zephyr";
 
           const session = await ai.live.connect({
@@ -964,6 +1339,7 @@ Give ready-to-speak phrases tailored to "${scenarioTitle}" or whatever the learn
                 safeSend({ type: "ready" });
               },
               onmessage: (message: LiveServerMessage) => {
+                resetIdleTimer();
                 const content = message.serverContent;
                 if (!content) return;
 
@@ -1024,6 +1400,23 @@ Give ready-to-speak phrases tailored to "${scenarioTitle}" or whatever the learn
           }
 
           liveSession = session;
+          resetIdleTimer();
+          if (maxDurationTimer) clearTimeout(maxDurationTimer);
+          maxDurationTimer = setTimeout(() => {
+            isClosing = true;
+            closeLiveSession();
+            safeSend({
+              type: "error",
+              message:
+                "Session reached the 15-minute continuous limit. Your conversation was saved — start a fresh session anytime.",
+            });
+            try {
+              clientWs.close(1000, "Max session duration reached");
+            } catch {
+              // ignore
+            }
+          }, LIVE_MAX_SESSION_MS);
+
           // Emit ready right after connect resolves in case onopen fired before handler attachment
           safeSend({ type: "ready" });
         } catch (err) {
@@ -1033,7 +1426,18 @@ Give ready-to-speak phrases tailored to "${scenarioTitle}" or whatever the learn
         return;
       }
 
-      if (msg.type === "audio" && msg.data && liveSession) {
+      if (msg.type === "audio" && typeof msg.data === "string" && liveSession) {
+        // Bound frame size and rate (~35 chunks/sec max; normal 4096@16kHz is ~4/sec)
+        if (msg.data.length > 65_536) return;
+        const now = Date.now();
+        if (now - audioWindowStart > 1000) {
+          audioWindowStart = now;
+          audioFramesInWindow = 0;
+        }
+        audioFramesInWindow += 1;
+        if (audioFramesInWindow > 35) return;
+
+        resetIdleTimer();
         try {
           liveSession.sendRealtimeInput({
             audio: {
@@ -1047,9 +1451,12 @@ Give ready-to-speak phrases tailored to "${scenarioTitle}" or whatever the learn
         return;
       }
 
-      if (msg.type === "text" && msg.text && liveSession) {
+      if (msg.type === "text" && typeof msg.text === "string" && liveSession) {
+        const cleanedText = clampString(msg.text, 1200);
+        if (!cleanedText) return;
+        resetIdleTimer();
         try {
-          liveSession.sendRealtimeInput({ text: msg.text });
+          liveSession.sendRealtimeInput({ text: cleanedText });
         } catch (err) {
           const { message } = formatApiError(err);
           safeSend({ type: "error", message });
@@ -1058,6 +1465,7 @@ Give ready-to-speak phrases tailored to "${scenarioTitle}" or whatever the learn
       }
 
       if (msg.type === "promptGreeting" && liveSession) {
+        resetIdleTimer();
         try {
           liveSession.sendRealtimeInput({
             text: "Greet the learner warmly in character in the target language to open our conversation.",
@@ -1078,11 +1486,13 @@ Give ready-to-speak phrases tailored to "${scenarioTitle}" or whatever the learn
     clientWs.on("close", () => {
       isClosing = true;
       closeLiveSession();
+      releaseResources();
     });
 
     clientWs.on("error", () => {
       isClosing = true;
       closeLiveSession();
+      releaseResources();
     });
   });
 

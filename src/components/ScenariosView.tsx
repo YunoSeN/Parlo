@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowRight, Filter, Plus, X } from "lucide-react";
 import { getLanguageByCode, LANGUAGES, VOICE_PERSONAS } from "../data/catalog";
+import { generateClientId } from "../lib/accountStorage";
 import { CountryFontSpec, getCultureByLanguage } from "../lib/cultures";
 import { DailyCulturalMission } from "../lib/dailyMission";
 import { CefrLevel, Scenario, VoiceName } from "../types";
@@ -94,7 +95,7 @@ export function ScenariosView({
       .filter(Boolean);
 
     const newScenario: Scenario = {
-      id: `custom-${Date.now()}`,
+      id: generateClientId("custom"),
       title: title.trim(),
       city: city.trim() || "Custom Setting",
       category: "Custom",
@@ -305,7 +306,7 @@ export function ScenariosView({
                   onChange={(e) => setLevel(e.target.value as CefrLevel)}
                   className="w-full px-3 py-2.5 text-sm bg-[var(--parlo-canvas)] border border-[var(--parlo-border)] text-[var(--parlo-ink)] rounded-lg focus:outline-none focus:border-[var(--parlo-primary)]"
                 >
-                  {(["A2", "B1", "B2", "C1"] as CefrLevel[]).map((lvl) => (
+                  {(["A1", "A2", "B1", "B2", "C1"] as CefrLevel[]).map((lvl) => (
                     <option key={lvl} value={lvl}>
                       CEFR {lvl}
                     </option>

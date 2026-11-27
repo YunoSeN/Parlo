@@ -3,8 +3,9 @@ import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowRight,
   Check,
-  CheckCircle2,
   ChevronDown,
+  Copy,
+  Info,
   Minus,
   Plus,
 } from "lucide-react";
@@ -40,14 +41,14 @@ interface ComparisonRow {
 const COMPARISON_ROWS: ComparisonRow[] = [
   {
     category: "Live Voice & Immersion",
-    feature: "Real-time voice conversation minutes",
-    listener: "20 min / week",
-    conversationalist: "Unlimited",
+    feature: "Real-time voice conversations",
+    listener: "Daily fair-use sessions (up to 15 min)",
+    conversationalist: "Extended priority sessions",
     cohort: "Unlimited per seat",
   },
   {
     category: "Live Voice & Immersion",
-    feature: "Languages & CEFR calibration (A2–C1)",
+    feature: "Languages & CEFR calibration (A1–C1)",
     listener: "All 8 languages",
     conversationalist: "All 8 languages",
     cohort: "All 8 + custom rubrics",
@@ -55,7 +56,7 @@ const COMPARISON_ROWS: ComparisonRow[] = [
   {
     category: "Live Voice & Immersion",
     feature: "Curated & custom scenario builder",
-    listener: "4 starter scenes",
+    listener: "All 8 cultural scenes",
     conversationalist: "Full catalog + custom",
     cohort: "Syllabus-matched scenes",
   },
@@ -84,8 +85,8 @@ const COMPARISON_ROWS: ComparisonRow[] = [
 
 const FAQ_ITEMS = [
   {
-    q: "What if I am at an A2 level and get stuck mid-sentence?",
-    a: "Every conversation tunes vocabulary and speaking pace to your selected CEFR level (A2–C1). You can switch to Slow pace, translate any partner turn inline, or tap Suggest Reply for three context-aware responses.",
+    q: "What if I am a complete beginner (A1/A2) and get stuck mid-sentence?",
+    a: "Every conversation tunes vocabulary and speaking pace to your selected CEFR level (A1–C1). At A1, your partner speaks slowly and understands brief English rescue words—plus you can use Hold-to-Talk, inline translation, or Suggest Reply anytime.",
   },
   {
     q: "Will live coaching interrupt me every time I make a small mistake?",
@@ -100,8 +101,8 @@ const FAQ_ITEMS = [
     a: "Flashcards train passive recognition; tutors require scheduling and high hourly rates. Parlo bridges the gap with immediate, judgment-free daily speaking rehearsal backed by structured debriefs.",
   },
   {
-    q: "Can I start free, sync across devices, and cancel anytime?",
-    a: "Yes. Listener is free forever with 20 speaking minutes each week. Sign in with Google to sync your streak, weekly goals, and Phrasebook across devices, and upgrade or cancel Conversationalist anytime with a 14-day fluency guarantee.",
+    q: "Is billing active right now, or can I explore everything in preview?",
+    a: "Parlo is currently in open studio preview—every language, 3D room, custom scenario, and live coaching feature is available to try right now with no payment or card required. Sign in with Google to sync your streak, weekly goals, and Phrasebook across devices.",
   },
 ];
 
@@ -116,8 +117,7 @@ export function PricingSection({
   const [billing, setBilling] = useState<BillingCycle>("annual");
   const [selectedPlan, setSelectedPlan] = useState<string>(activePlanId);
   const [cohortSeats, setCohortSeats] = useState<number>(15);
-  const [teamEmail, setTeamEmail] = useState("");
-  const [teamSubmitted, setTeamSubmitted] = useState(false);
+  const [briefCopied, setBriefCopied] = useState(false);
   const [openFaqIdx, setOpenFaqIdx] = useState<number | null>(0);
   const [showCompare, setShowCompare] = useState<boolean>(false);
 
@@ -147,8 +147,24 @@ export function PricingSection({
 
   const handlePlanSelect = (planId: string) => {
     setSelectedPlan(planId);
-    setTeamSubmitted(false);
+    setBriefCopied(false);
     onBookCall?.(planId);
+  };
+
+  const handleCopyCohortBrief = async () => {
+    const summary = [
+      `Parlo Immersion Studio Cohort Estimate`,
+      `Seats: ${cohortSeats}`,
+      `Billing Cycle: ${billing === "annual" ? "Annual" : "Monthly"}`,
+      `Estimated Rate: $${cohortPricing.perSeat}/seat/mo ($${cohortPricing.monthlyTotal}/mo total)`,
+      `Tier: ${cohortPricing.discountLabel}`,
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(summary);
+      setBriefCopied(true);
+    } catch {
+      setBriefCopied(false);
+    }
   };
 
   return (
@@ -266,59 +282,49 @@ export function PricingSection({
         </div>
       </div>
 
-      {/* Inline Selection / Cohort Walkthrough Confirmation Strip */}
-      {selectedPlan && (
-        <div className="mt-6 bg-[var(--parlo-surface)] border border-[var(--parlo-accent-border)] rounded-xl p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="flex items-start gap-3">
-            <CheckCircle2
-              className="w-5 h-5 text-[var(--parlo-accent)] shrink-0 mt-0.5"
-              aria-hidden="true"
-            />
-            <div>
-              <p className="text-sm font-semibold text-[var(--parlo-ink)]">
-                {selectedPlan === "schools-teams"
-                  ? `Immersion Studio selected (${cohortSeats} seats · $${cohortPricing.monthlyTotal}/mo)`
-                  : selectedPlan === "parlo-plus"
-                  ? `Conversationalist selected ($${plusPrice}/mo ${billing === "annual" ? "billed annually" : "monthly"})`
-                  : "Listener (Free) is active in your studio"}
-              </p>
-              <p className="text-xs text-[var(--parlo-ink-muted)] mt-0.5">
-                {selectedPlan === "schools-teams"
-                  ? teamSubmitted
-                    ? "Your institutional walkthrough request is recorded. We will follow up with cohort setup options."
-                    : "Share your work or university email to schedule a custom scenario and seat-management walkthrough."
-                  : "All voice sessions, daily streaks, weekly targets, and Phrasebook cards are ready in your studio."}
-              </p>
-            </div>
+      {/* Honest Open-Preview & Estimate Strip (No simulated checkout or fake form submission) */}
+      <div className="mt-6 bg-[var(--parlo-surface)] border border-[var(--parlo-border)] rounded-xl p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <Info
+            className="w-5 h-5 text-[var(--parlo-primary)] shrink-0 mt-0.5"
+            aria-hidden="true"
+          />
+          <div>
+            <p className="text-sm font-semibold text-[var(--parlo-ink)]">
+              {selectedPlan === "schools-teams"
+                ? `Cohort estimate preview (${cohortSeats} seats · $${cohortPricing.monthlyTotal}/mo ${billing})`
+                : selectedPlan === "parlo-plus"
+                ? `Previewing Conversationalist ($${plusPrice}/mo ${billing === "annual" ? "annual" : "monthly"})`
+                : "Open Studio Preview — No billing or card required"}
+            </p>
+            <p className="text-xs text-[var(--parlo-ink-muted)] mt-0.5 leading-relaxed">
+              {selectedPlan === "schools-teams"
+                ? "Online checkout and institutional sales forms are not connected in this preview. Copy your seat estimate below to share with your team or department."
+                : "Checkout is not enabled yet. All voice practice, 3D rooms, custom scenarios, and Phrasebook features are unlocked for preview right now."}
+            </p>
           </div>
-
-          {selectedPlan === "schools-teams" && !teamSubmitted && (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (teamEmail.trim()) setTeamSubmitted(true);
-              }}
-              className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0"
-            >
-              <input
-                type="email"
-                required
-                value={teamEmail}
-                onChange={(e) => setTeamEmail(e.target.value)}
-                placeholder="director@academy.edu"
-                aria-label="Work or academic email"
-                className="px-3 py-2 text-xs bg-[var(--parlo-canvas)] border border-[var(--parlo-border)] rounded-lg text-[var(--parlo-ink)] placeholder:text-[var(--parlo-ink-muted)] focus:outline-2 focus:outline-[var(--parlo-primary)] min-w-0 flex-1 sm:min-w-[210px]"
-              />
-              <button
-                type="submit"
-                className="px-4 py-2 text-xs font-medium text-[var(--parlo-on-solid)] bg-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-hover)] rounded-lg transition-colors whitespace-nowrap cursor-pointer"
-              >
-                Request Walkthrough
-              </button>
-            </form>
-          )}
         </div>
-      )}
+
+        {selectedPlan === "schools-teams" && (
+          <button
+            type="button"
+            onClick={() => void handleCopyCohortBrief()}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-medium text-[var(--parlo-on-solid)] bg-[var(--parlo-primary)] hover:bg-[var(--parlo-primary-hover)] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            {briefCopied ? (
+              <>
+                <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                Estimate Copied
+              </>
+            ) : (
+              <>
+                <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                Copy Cohort Estimate
+              </>
+            )}
+          </button>
+        )}
+      </div>
 
       {/* 3-Column Editorial Pricing Architecture with 3D Perspective Tilt */}
       <div className="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
@@ -355,18 +361,18 @@ export function PricingSection({
               </span>
             </div>
             <p className="mt-2 text-xs text-[var(--parlo-ink-muted)]">
-              No card required · 20 speaking min / week
+              No card required · Daily fair-use voice sessions
             </p>
           </div>
 
           <div className="p-6 flex-1 flex flex-col">
             <ul className="space-y-3.5 text-sm text-[var(--parlo-ink-secondary)]">
               {[
-                "20 minutes of live real-time voice practice every week",
-                "All 8 languages with A2–C1 CEFR tuning & pace control",
-                "4 curated real-world immersion scenarios",
-                "Daily streak tracker, weekly goal widget & 50-card Phrasebook",
-                "On-demand turn translations & pronunciation playback",
+                "Daily live real-time voice sessions (up to 15 min per session)",
+                "All 8 languages with A1–C1 CEFR tuning, Hold-to-Talk & pace control",
+                "All 8 curated neighborhood & cultural immersion scenarios",
+                "Daily streak tracker, weekly goal widget & Phrasebook flashcards",
+                "On-demand turn translations, word dictionary & pronunciation playback",
               ].map((item) => (
                 <li key={item} className="flex items-start gap-2.5">
                   <span className="mt-0.5 w-4 h-4 rounded-full bg-[var(--parlo-canvas)] border border-[var(--parlo-border)] flex items-center justify-center shrink-0">
@@ -479,8 +485,8 @@ export function PricingSection({
                 className="w-full"
               >
                 {selectedPlan === "parlo-plus"
-                  ? "Selected — Open Studio"
-                  : "Choose Conversationalist"}
+                  ? "Previewing — Open Studio"
+                  : "Preview Conversationalist"}
               </GlowCtaButton>
             </div>
           </div>
@@ -600,7 +606,7 @@ export function PricingSection({
                 onClick={() => handlePlanSelect("schools-teams")}
                 className="w-full"
               >
-                Request Cohort Walkthrough
+                Preview Cohort Estimate
               </GlowCtaButton>
             </div>
           </div>

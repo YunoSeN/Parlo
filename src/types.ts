@@ -6,7 +6,9 @@ export type AppView =
   | 'review'
   | 'pricing';
 
-export type CefrLevel = 'A2' | 'B1' | 'B2' | 'C1';
+export type CefrLevel = 'A1' | 'A2' | 'B1' | 'B2' | 'C1';
+
+export type MicMode = 'hands-free' | 'push-to-talk';
 
 export type VoiceName = 'Zephyr' | 'Kore' | 'Puck' | 'Charon' | 'Fenrir';
 
@@ -144,6 +146,7 @@ export interface WordLookupResult {
   meaning: string;
   dialectNote: string;
   example: string;
+  exampleTranslation?: string;
 }
 
 export type SrsRating = 'again' | 'good' | 'easy';

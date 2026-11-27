@@ -43,13 +43,11 @@ interface DockDestination {
   iconId: DockIconId;
 }
 
-const DOCK_DESTINATIONS: DockDestination[] = [
-  { id: "studio", label: "Studio", shortcut: "1", iconId: "studio" },
-  { id: "spatial", label: "3D Stage", shortcut: "2", iconId: "spatial" },
-  { id: "scenarios", label: "Scenarios", shortcut: "3", iconId: "scenarios" },
-  { id: "phrasebook", label: "Phrasebook", shortcut: "4", iconId: "phrasebook" },
-  { id: "review", label: "Review", shortcut: "5", iconId: "review" },
-  { id: "pricing", label: "Pricing", shortcut: "6", iconId: "pricing" },
+const PRIMARY_DESTINATIONS: DockDestination[] = [
+  { id: "studio", label: "Practice", shortcut: "1", iconId: "studio" },
+  { id: "scenarios", label: "Scenarios", shortcut: "2", iconId: "scenarios" },
+  { id: "phrasebook", label: "Words", shortcut: "3", iconId: "phrasebook" },
+  { id: "review", label: "Progress", shortcut: "4", iconId: "review" },
 ];
 
 // Compact, refined desktop macOS dock dimensions
@@ -400,8 +398,8 @@ export function MagnificationDock({
             }}
           />
 
-          {/* Core 6 Navigation Views */}
-          {DOCK_DESTINATIONS.map((dest) => {
+          {/* Core 4 Learning Loop Views: Practice · Scenarios · Words · Progress */}
+          {PRIMARY_DESTINATIONS.map((dest) => {
             const catFont = categoryFonts[dest.id];
             return (
               <DockIconTile
@@ -429,7 +427,7 @@ export function MagnificationDock({
           {/* Utility 1: Live Voice Session */}
           <DockIconTile
             mouseX={mouseX}
-            label={isSessionActive ? "End Voice Session" : "Start Live Voice"}
+            label={isSessionActive ? "End Voice Session" : "Start Speaking"}
             sublabel={isSessionActive ? "On Air" : culture.atelierName}
             highlightTone={isSessionActive ? "danger" : "primary"}
             livePulse={isSessionActive}
@@ -437,10 +435,21 @@ export function MagnificationDock({
             onClick={onToggleVoiceSession}
           />
 
-          {/* Utility 2: Multi-Turn Gemini Tutor Chat */}
+          {/* Utility 2: 3D Immersion Rooms */}
           <DockIconTile
             mouseX={mouseX}
-            label={chatOpen ? "Close Tutor Chat" : "Gemini Tutor Chat"}
+            label="3D Rooms"
+            sublabel="Spatial Stage"
+            shortcut="5"
+            active={activeView === "spatial"}
+            iconId="spatial"
+            onClick={() => onNavigate("spatial")}
+          />
+
+          {/* Utility 3: Multi-Turn Tutor Chat */}
+          <DockIconTile
+            mouseX={mouseX}
+            label={chatOpen ? "Close Tutor Chat" : "Tutor Chat"}
             sublabel="Multi-Turn"
             shortcut="⌘J"
             active={chatOpen}
@@ -449,10 +458,10 @@ export function MagnificationDock({
             onClick={onToggleChat}
           />
 
-          {/* Utility 3: Soundscapes & SFX Mixer */}
+          {/* Utility 4: Soundscapes & SFX Mixer */}
           <DockIconTile
             mouseX={mouseX}
-            label={soundPanelOpen ? "Close Soundscapes" : "Soundscapes & SFX"}
+            label={soundPanelOpen ? "Close Soundscapes" : "Soundscapes"}
             sublabel={
               activeSoundLayersCount > 0
                 ? `${activeSoundLayersCount} playing`
@@ -468,15 +477,6 @@ export function MagnificationDock({
             }
             iconId="soundscape"
             onClick={onToggleSoundPanel}
-          />
-
-          {/* Utility 4: Hear Cultural Proverb */}
-          <DockIconTile
-            mouseX={mouseX}
-            label={`Hear ${culture.greeting}`}
-            sublabel={culture.cityLine}
-            iconId="proverb-audio"
-            onClick={onSpeakCultureProverb}
           />
 
           {/* Utility 5: Command Palette */}
@@ -516,7 +516,7 @@ export function MagnificationDock({
               live={isSessionActive}
               className="w-[20px] h-[20px]"
             />
-            <span className="text-[10px] font-medium leading-none">Studio</span>
+            <span className="text-[11px] font-medium leading-none">Practice</span>
           </button>
 
           {/* Slot 2: Scenarios */}
@@ -538,7 +538,7 @@ export function MagnificationDock({
               active={activeView === "scenarios"}
               className="w-[20px] h-[20px]"
             />
-            <span className="text-[10px] font-medium leading-none">Scenes</span>
+            <span className="text-[11px] font-medium leading-none">Scenes</span>
           </button>
 
           {/* Slot 3: Center Primary Live Voice Trigger */}
@@ -568,7 +568,7 @@ export function MagnificationDock({
             </motion.button>
           </div>
 
-          {/* Slot 4: Phrasebook */}
+          {/* Slot 4: Words */}
           <button
             type="button"
             onClick={() => {
@@ -594,7 +594,7 @@ export function MagnificationDock({
                 </span>
               )}
             </span>
-            <span className="text-[10px] font-medium leading-none">Phrases</span>
+            <span className="text-[11px] font-medium leading-none">Words</span>
           </button>
 
           {/* Slot 5: More Sheet Trigger */}
@@ -677,9 +677,9 @@ export function MagnificationDock({
                   <div className="grid grid-cols-3 gap-2">
                     {(
                       [
-                        { id: "spatial", label: "3D Stage", iconId: "spatial" },
-                        { id: "review", label: "Review", iconId: "review" },
-                        { id: "pricing", label: "Pricing", iconId: "pricing" },
+                        { id: "review", label: "Progress", iconId: "review" },
+                        { id: "spatial", label: "3D Rooms", iconId: "spatial" },
+                        { id: "pricing", label: "Plans", iconId: "pricing" },
                       ] as const
                     ).map((item) => {
                       const active = activeView === item.id;
